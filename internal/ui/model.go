@@ -64,6 +64,10 @@ type Model struct {
 	window        windowMode
 	beforeOverlap windowMode // what o returns to
 	chartHeight   int        // Activity line chart rows; 0 means defaultChartH
+	// content is the rendered body, split into lines. Rendering a tab can take
+	// milliseconds (Activity draws several charts), so it's redone only when
+	// something shown changes; scrolling just moves a window over these lines.
+	content []string
 }
 
 func New(opts Options) Model {
@@ -130,6 +134,8 @@ func (m Model) loading() bool {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	rerender := true
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -142,21 +148,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r := &m.repos[msg.idx]
 		r.prs, r.prErr, r.prDone = msg.data, msg.err, true
 	case spinner.TickMsg:
-		if m.loading() {
-			var cmd tea.Cmd
-			m.spin, cmd = m.spin.Update(msg)
-			return m, cmd
+		// Loading messages in the body show the spinner, so it redraws while loading.
+		if !m.loading() {
+			return m, nil
 		}
+		m.spin, cmd = m.spin.Update(msg)
 	case tea.KeyMsg:
+		rerender = false
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
 		case "tab", "right", "l":
 			m.setTab((m.tab + 1) % len(tabNames))
+			rerender = true
 		case "shift+tab", "left", "h":
 			m.setTab((m.tab + len(tabNames) - 1) % len(tabNames))
+			rerender = true
 		case "1", "2", "3", "4", "5":
 			m.setTab(int(msg.String()[0] - '1'))
+			rerender = true
 		case "down", "j":
 			m.scroll = min(m.scroll+1, m.maxScroll())
 		case "up", "k":
@@ -167,7 +177,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = max(m.scroll-m.bodyHeight(), 0)
 		case "+", "=":
 			if m.tab == activityTab {
-				m.resizeCharts(chartStep)
+				m.resizeCharts(chartStep) // renders itself
 			}
 		case "-", "_":
 			if m.tab == activityTab {
@@ -176,19 +186,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "t":
 			m.window = m.window.next(m.comparing())
 			m.applyWindow()
+			rerender = true
 		case "o":
-			if !m.comparing() {
-				break
+			if m.comparing() {
+				if m.window == windowOverlap {
+					m.window = m.beforeOverlap
+				} else {
+					m.beforeOverlap, m.window = m.window, windowOverlap
+				}
+				m.applyWindow()
+				rerender = true
 			}
-			if m.window == windowOverlap {
-				m.window = m.beforeOverlap
-			} else {
-				m.beforeOverlap, m.window = m.window, windowOverlap
-			}
-			m.applyWindow()
 		}
+	default:
+		rerender = false
 	}
-	return m, nil
+	if rerender {
+		m.render()
+	}
+	return m, cmd
+}
+
+// render redraws the active tab into content and keeps scroll in range.
+func (m *Model) render() {
+	m.content = strings.Split(m.body(), "\n")
+	m.scroll = min(m.scroll, m.maxScroll())
 }
 
 func (m *Model) setTab(t int) {
@@ -201,8 +223,7 @@ func (m Model) bodyHeight() int {
 }
 
 func (m Model) maxScroll() int {
-	lines := strings.Count(m.body(), "\n") + 1
-	return max(lines-m.bodyHeight(), 0)
+	return max(len(m.content)-m.bodyHeight(), 0)
 }
 
 func (m Model) View() string {
@@ -212,7 +233,7 @@ func (m Model) View() string {
 	if m.width < 64 || m.height < 12 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dimStyle.Render("window too small"))
 	}
-	lines := strings.Split(m.body(), "\n")
+	lines := m.content
 	h := m.bodyHeight()
 	off := min(m.scroll, max(len(lines)-h, 0))
 	visible := lines[off:min(off+h, len(lines))]

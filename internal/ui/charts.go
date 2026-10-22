@@ -36,24 +36,24 @@ func (m *Model) resizeCharts(delta int) {
 		return
 	}
 	anchor, offset := -1, 0
-	for i, start := range chartStarts(m.body()) {
+	for i, start := range chartStarts(m.content) {
 		if start >= 0 && start <= m.scroll {
 			anchor, offset = i, m.scroll-start
 		}
 	}
 	m.chartHeight = h
+	m.render()
 	if anchor >= 0 {
-		if start := chartStarts(m.body())[anchor]; start >= 0 {
-			m.scroll = start + offset
+		if start := chartStarts(m.content)[anchor]; start >= 0 {
+			m.scroll = min(start+offset, m.maxScroll())
 		}
 	}
-	m.scroll = min(m.scroll, m.maxScroll())
 }
 
-// chartStarts is the body line of each Activity chart's title, or -1 if it isn't shown.
-func chartStarts(body string) []int {
+// chartStarts is the line of each Activity chart's title, or -1 if it isn't shown.
+func chartStarts(lines []string) []int {
 	starts := []int{-1, -1, -1}
-	for n, line := range strings.Split(body, "\n") {
+	for n, line := range lines {
 		for i, title := range activityCharts {
 			if starts[i] < 0 && strings.Contains(line, title) {
 				starts[i] = n

@@ -239,10 +239,34 @@ func TestChartHeight(t *testing.T) {
 	// Growing the charts keeps the chart at the top of the screen in place.
 	mm := m.(Model)
 	mm.chartHeight = 0
-	mm.scroll = chartStarts(mm.body())[1] + 2 // a little way into the commits chart
+	mm.render()
+	mm.scroll = chartStarts(mm.content)[1] + 2 // a little way into the commits chart
 	m = key(mm, '=')
 	mm = m.(Model)
-	if got, want := mm.scroll, chartStarts(mm.body())[1]+2; got != want {
+	if got, want := mm.scroll, chartStarts(mm.content)[1]+2; got != want {
 		t.Errorf("scroll = %d, want %d", got, want)
+	}
+}
+
+// Scrolling must reuse the rendered tab: re-rendering Activity takes milliseconds per keypress.
+func TestScrollDoesNotRerender(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	before := m.(Model).content
+	for _, k := range []tea.KeyType{tea.KeyDown, tea.KeyDown, tea.KeyPgDown, tea.KeyPgUp, tea.KeyUp, tea.KeyUp} {
+		m, _ = m.Update(tea.KeyMsg{Type: k})
+	}
+	if after := m.(Model).content; &after[0] != &before[0] {
+		t.Errorf("scrolling re-rendered the tab")
+	}
+	if m.(Model).scroll != 0 {
+		t.Errorf("scroll = %d after returning to the top", m.(Model).scroll)
+	}
+	// Changing what's shown does re-render.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if after := m.(Model).content; &after[0] == &before[0] {
+		t.Errorf("changing the time window didn't re-render")
 	}
 }

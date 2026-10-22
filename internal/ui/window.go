@@ -98,7 +98,6 @@ func (m *Model) applyWindow() {
 		}
 		r.hist = s
 	}
-	m.scroll = min(m.scroll, m.maxScroll())
 }
 
 // windowed reports whether history stats are currently limited to a time window.
