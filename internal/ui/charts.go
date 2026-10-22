@@ -13,7 +13,9 @@ const (
 )
 
 // Activity's line charts in page order; resizeCharts finds them by title.
-var activityCharts = []string{"Total lines over time", "Commits per week", "Average PR size per month"}
+var activityCharts = []string{
+	"Total lines over time", "Commits per week", "Average PR size per month", "Commits touching tests per month",
+}
 
 func (m Model) chartH() int {
 	if m.chartHeight == 0 {
@@ -52,7 +54,10 @@ func (m *Model) resizeCharts(delta int) {
 
 // chartStarts is the line of each Activity chart's title, or -1 if it isn't shown.
 func chartStarts(lines []string) []int {
-	starts := []int{-1, -1, -1}
+	starts := make([]int, len(activityCharts))
+	for i := range starts {
+		starts[i] = -1
+	}
 	for n, line := range lines {
 		for i, title := range activityCharts {
 			if starts[i] < 0 && strings.Contains(line, title) {

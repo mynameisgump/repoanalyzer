@@ -15,6 +15,8 @@ var (
 	delStyle     = lipgloss.NewStyle().Foreground(red)
 	errStyle     = lipgloss.NewStyle().Foreground(red)
 	sectionStyle = lipgloss.NewStyle().Bold(true).MarginTop(1).MarginBottom(1)
+	// Test files and test shares; teal stays clear of the green/red used for added/deleted lines.
+	testStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#1B7C83", Dark: "#39C5CF"})
 
 	activeTabStyle   = lipgloss.NewStyle().Bold(true).Foreground(accent).Underline(true).Padding(0, 1)
 	inactiveTabStyle = lipgloss.NewStyle().Foreground(subtle).Padding(0, 1)

@@ -17,7 +17,7 @@ import (
 // Files larger than this are assumed to be data or generated and are skipped.
 const maxFileSize = 4 << 20
 
-// How many of the largest files Result.Largest keeps.
+// How many of the largest test files, and of other files, Result.Largest keeps.
 const largestLimit = 50
 
 // Lockfiles are tracked but are not code anyone wrote, so they'd skew the totals.
@@ -33,15 +33,13 @@ type Language struct {
 	Lines int    `json:"lines"`
 	Blank int    `json:"blank"`
 	Code  int    `json:"code"`
-	// The part of Files and Code that is tests; see IsTest.
-	TestFiles int `json:"test_files"`
-	TestCode  int `json:"test_code"`
 }
 
 type File struct {
 	Path     string `json:"path"`
 	Language string `json:"language"`
 	Lines    int    `json:"lines"`
+	Test     bool   `json:"test,omitempty"` // see IsTest
 }
 
 type Result struct {
@@ -49,8 +47,6 @@ type Result struct {
 	Lines     int        `json:"lines"`
 	Blank     int        `json:"blank"`
 	Code      int        `json:"code"`
-	TestFiles int        `json:"test_files"` // the part of Files and Code that is tests; see IsTest
-	TestCode  int        `json:"test_code"`
 	Skipped   int        `json:"skipped"` // binary, oversized, lockfiles, missing
 	Languages []Language `json:"languages"`
 	Largest   []File     `json:"largest"`
@@ -79,7 +75,7 @@ func Count(root string, paths []string) Result {
 	results := make(chan *File)
 	var wg sync.WaitGroup
 
-	type langAcc struct{ files, lines, blank, testFiles, testCode int }
+	type langAcc struct{ files, lines, blank int }
 	var mu sync.Mutex
 	langs := map[string]*langAcc{}
 	skipped := 0
@@ -110,12 +106,8 @@ func Count(root string, paths []string) Result {
 				a.files++
 				a.lines += lines
 				a.blank += blank
-				if IsTest(p) {
-					a.testFiles++
-					a.testCode += lines - blank
-				}
 				mu.Unlock()
-				results <- &File{Path: p, Language: lang, Lines: lines}
+				results <- &File{Path: p, Language: lang, Lines: lines, Test: IsTest(p)}
 			}
 		}()
 	}
@@ -136,11 +128,8 @@ func Count(root string, paths []string) Result {
 	var r Result
 	for name, a := range langs {
 		code := a.lines - a.blank
-		r.Languages = append(r.Languages, Language{Name: name, Files: a.files, Lines: a.lines, Blank: a.blank, Code: code,
-			TestFiles: a.testFiles, TestCode: a.testCode})
+		r.Languages = append(r.Languages, Language{Name: name, Files: a.files, Lines: a.lines, Blank: a.blank, Code: code})
 		r.Files += a.files
-		r.TestFiles += a.testFiles
-		r.TestCode += a.testCode
 		r.Lines += a.lines
 		r.Blank += a.blank
 		r.Code += code
@@ -158,10 +147,18 @@ func Count(root string, paths []string) Result {
 		}
 		return files[i].Path < files[j].Path
 	})
-	if len(files) > largestLimit {
-		files = files[:largestLimit]
+	// Keep the largest test and non-test files separately so either can be listed on its own.
+	tests, others := 0, 0
+	for _, f := range files {
+		n := &others
+		if f.Test {
+			n = &tests
+		}
+		if *n < largestLimit {
+			r.Largest = append(r.Largest, f)
+			*n++
+		}
 	}
-	r.Largest = files
 	return r
 }
 

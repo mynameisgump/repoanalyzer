@@ -23,10 +23,10 @@ func section(title string) string {
 
 func (m Model) overview(w int) string {
 	if !m.comparing() {
-		return m.each(w, m.overviewRepo)
+		return m.each(w, oneSection(m.overviewRepo))
 	}
 	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" +
-		m.each(w, func(r *repoState, w int) string { return languages(r, w, m.showAll()) })
+		m.each(w, func(r *repoState, w int) []string { return []string{languages(r, w, m.showAll())} })
 }
 
 func (m Model) overviewRepo(r *repoState, w int) string {
@@ -185,16 +185,16 @@ func (m Model) authors(w int) string {
 		limit = 15 // keep both repos within a reasonable scroll
 	}
 	windowed, all := m.windowed(), m.showAll()
-	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed, all, m.prSort) })
+	return m.each(w, func(r *repoState, w int) []string { return authorsRepo(r, w, limit, windowed, all, m.prSort) })
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey) string {
+func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey) []string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
-			return dimStyle.Render("No commits in this time window.")
+			return []string{dimStyle.Render("No commits in this time window.")}
 		}
-		return dimStyle.Render("No commits yet.")
+		return []string{dimStyle.Render("No commits yet.")}
 	}
 	recent := "the last 90 days"
 	if windowed {
@@ -212,49 +212,82 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKe
 	if wide {
 		headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "First", "Last"}
 	}
-	t := table.New().
-		Border(lipgloss.RoundedBorder()).
-		BorderStyle(dimStyle).
-		Headers(headers...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Padding(0, 1)
-			if row == table.HeaderRow {
-				return s.Bold(true).Foreground(r.color)
-			}
-			switch headers[col] {
-			case "#":
-				s = s.Align(lipgloss.Right).Foreground(subtle)
-			case "Commits":
-				s = s.Align(lipgloss.Right)
-			case "Added":
-				s = s.Align(lipgloss.Right).Foreground(green)
-			case "Deleted":
-				s = s.Align(lipgloss.Right).Foreground(red)
-			case "First", "Last":
-				s = s.Foreground(subtle)
-			}
-			return s
-		})
 	topCommits := float64(authors[0].Commits)
-	for i, a := range authors {
-		share := pct(a.Commits, h.Commits)
-		row := []string{fmt.Sprint(i + 1), truncate(a.Name, nameW), num(a.Commits), share,
-			"+" + num(a.Added), "-" + num(a.Deleted), ago(a.Last)}
-		if wide {
-			row[3] = hbar(float64(a.Commits), topCommits, 10) + " " + share
-			row = append(row[:6], a.First.Format("2006-01-02"), ago(a.Last))
+	cell := func(i int, a stats.Author, col string) string {
+		switch col {
+		case "#":
+			return fmt.Sprint(i + 1)
+		case "Author":
+			return truncate(a.Name, nameW)
+		case "Commits":
+			return num(a.Commits)
+		case "Share":
+			if wide {
+				return hbar(float64(a.Commits), topCommits, 10) + " " + pct(a.Commits, h.Commits)
+			}
+			return pct(a.Commits, h.Commits)
+		case "Added":
+			return "+" + num(a.Added)
+		case "Deleted":
+			return "-" + num(a.Deleted)
+		case "First":
+			return a.First.Format("2006-01-02")
 		}
-		t.Row(row...)
+		return ago(a.Last)
 	}
+	build := func(headers []string) *table.Table {
+		t := table.New().
+			Border(lipgloss.RoundedBorder()).
+			BorderStyle(dimStyle).
+			Headers(headers...).
+			StyleFunc(func(row, col int) lipgloss.Style {
+				s := lipgloss.NewStyle().Padding(0, 1)
+				if row == table.HeaderRow {
+					return s.Bold(true).Foreground(r.color)
+				}
+				switch headers[col] {
+				case "#":
+					s = s.Align(lipgloss.Right).Foreground(subtle)
+				case "Commits":
+					s = s.Align(lipgloss.Right)
+				case "Added":
+					s = s.Align(lipgloss.Right).Foreground(green)
+				case "Deleted":
+					s = s.Align(lipgloss.Right).Foreground(red)
+				case "First", "Last":
+					s = s.Foreground(subtle)
+				}
+				return s
+			})
+		for i, a := range authors {
+			var row []string
+			for _, col := range headers {
+				row = append(row, cell(i, a, col))
+			}
+			t.Row(row...)
+		}
+		return t
+	}
+	t := build(headers)
 	rendered := t.Render()
+	// Still too wide (e.g. side by side): drop columns before squeezing, which wraps names and numbers.
+	for _, drop := range []string{"Share", "Last"} {
+		if lipgloss.Width(rendered) <= w {
+			break
+		}
+		headers = slices.DeleteFunc(headers, func(h string) bool { return h == drop })
+		t = build(headers)
+		rendered = t.Render()
+	}
 	if lipgloss.Width(rendered) > w {
 		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
 	}
-	out := withNote(summary+"\n"+rendered, more)
+	sections := []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
 	if len(h.PRSizes.ByAuthor) > 0 {
-		out += "\n" + section("PR size by author (lines changed per PR)") + "\n" + prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort)
+		sections = append(sections, section("PR size by author (lines changed per PR)")+"\n"+
+			prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort))
 	}
-	return out
+	return sections
 }
 
 // prSortKey picks the column PR size by author is ordered by, largest first.
@@ -340,10 +373,7 @@ func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool, sortBy prSort
 			}
 		}
 	}
-	return withNote(b.String(), more) + "\n" + dimStyle.Width(w).Render("Sorted by "+cols[sortBy].title+
-		", largest first (s to change). Lines added + deleted per PR merged into this branch (excl. lockfiles); each column "+
-		"has its own scale. Merge commits count for the PR branch's author, not whoever merged. A few huge PRs pull the "+
-		"average up; the median is the typical PR.")
+	return withNote(b.String(), more)
 }
 
 // sortAuthorPRs orders authors by the chosen column, largest first. Ties go to
@@ -371,8 +401,8 @@ func sortAuthorPRs(authors []stats.AuthorPRs, by prSortKey) {
 
 // activity overlays every repo on the same line charts, one color each.
 func (m Model) activity(w int) string {
-	var lines, commits, prSizes []series
-	var pending, prSummaries []string
+	var lines, commits, prSizes, tests []series
+	var pending, prSummaries, testSummaries []string
 	for i := range m.repos {
 		r := &m.repos[i]
 		if s := m.status(r, w); s != "" {
@@ -399,6 +429,14 @@ func (m Model) activity(w int) string {
 		}
 		prSizes = append(prSizes, ps)
 		prSummaries = append(prSummaries, m.prSizeSummary(r))
+
+		ts := series{name: r.name, color: r.color}
+		for _, mo := range h.TestsMonthly {
+			ts.times = append(ts.times, mo.Start)
+			ts.vals = append(ts.vals, 100*float64(mo.TestCommits)/float64(mo.Commits))
+		}
+		tests = append(tests, ts)
+		testSummaries = append(testSummaries, m.testSummary(r, w))
 	}
 
 	var out []string
@@ -413,10 +451,10 @@ func (m Model) activity(w int) string {
 	}
 	from, to, _, _ := m.span() // zero unless windowed, letting the charts fit the data
 	out = append(out,
-		section(activityCharts[0])+"\n"+timeChart(lines, w, m.chartH(), shortNum, from, to)+"\n"+
-			dimStyle.Width(w).Render("All lines in tracked text files (incl. blank), rebuilt from per-commit diffs."),
+		section(activityCharts[0])+"\n"+timeChart(lines, w, m.chartH(), shortNum, from, to),
 		section(activityCharts[1])+"\n"+timeChart(commits, w, m.chartH(), nil, from, to),
 		section(activityCharts[2]+" (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w, m.chartH(), from, to),
+		section(activityCharts[3]+" (% of commits)")+"\n"+testChart(tests, testSummaries, w, m.chartH(), from, to),
 		section("When commits happen (local time)")+"\n"+m.punchcards(w),
 	)
 	return strings.Join(out, "\n")
@@ -428,12 +466,9 @@ func prSizeChart(ss []series, summaries []string, w, h int, from, to time.Time) 
 		found = found || len(s.times) > 0
 	}
 	if !found {
-		return dimStyle.Width(w).Render("No merged PRs found in this branch's history. PRs are detected from " +
-			"\"Merge pull request #N\" commits and squash-merge titles ending in \"(#N)\"; rebase merges can't be detected.")
+		return dimStyle.Render("No merged PRs found in this branch's history.")
 	}
-	return timeChart(ss, w, h, shortNum, from, to) + "\n" + strings.Join(summaries, "\n") + "\n" +
-		dimStyle.Width(w).Render("Lines added + deleted per PR as it landed on this branch (excl. lockfiles), "+
-			"averaged per month; months without PRs are skipped. Large PRs pull the average up, so compare with the median.")
+	return timeChart(ss, w, h, shortNum, from, to) + "\n" + strings.Join(summaries, "\n")
 }
 
 // prSizeSummary is a one-line overall PR size summary for a repo.
@@ -577,126 +612,86 @@ func punchcard(grid [7][24]int, cellW int) string {
 	return b.String()
 }
 
-func (m Model) filesRepo(r *repoState, w int) string {
-	h, l := r.hist, r.local.LOC
+// fileListLimit caps the Files tab's lists. History and the line count keep the
+// top 50 test and top 50 other files, which covers the top 50 of any filter.
+const fileListLimit = 50
 
-	all := m.showAll()
-	nHot, hotMore := listCut(len(h.HotFiles), 15, all)
+func (m Model) filesRepo(r *repoState, w int) []string {
+	h, l := r.hist, r.local.LOC
+	all, filter := m.showAll(), m.fileFilter
+	tag := func(test bool) string {
+		if filter != allFiles {
+			return "" // every row would say the same
+		}
+		return testTag(test)
+	}
+
+	var hotFiles []stats.File
+	for _, f := range h.HotFiles {
+		if filter.keep(f.Test) && len(hotFiles) < fileListLimit {
+			hotFiles = append(hotFiles, f)
+		}
+	}
+	nHot, hotMore := listCut(len(hotFiles), 15, all)
 	var hot []barRow
-	for _, f := range h.HotFiles[:nHot] {
+	for _, f := range hotFiles[:nHot] {
 		hot = append(hot, barRow{
 			label: f.Path,
 			value: float64(f.Commits),
-			text:  fmt.Sprintf("%5s commits  %s %s", num(f.Commits), addStyle.Render("+"+num(f.Added)), delStyle.Render("-"+num(f.Deleted))),
+			text: fmt.Sprintf("%5s commits  %s %s", num(f.Commits), addStyle.Render("+"+num(f.Added)), delStyle.Render("-"+num(f.Deleted))) +
+				tag(f.Test),
 		})
 	}
-	nBig, bigMore := listCut(len(l.Largest), 15, all)
+	var largest []loc.File
+	for _, f := range l.Largest {
+		if filter.keep(f.Test) && len(largest) < fileListLimit {
+			largest = append(largest, f)
+		}
+	}
+	nBig, bigMore := listCut(len(largest), 15, all)
 	var big []barRow
-	for _, f := range l.Largest[:nBig] {
+	for _, f := range largest[:nBig] {
 		big = append(big, barRow{
 			label: f.Path,
 			value: float64(f.Lines),
-			text:  fmt.Sprintf("%7s lines", num(f.Lines)),
+			text:  fmt.Sprintf("%7s lines", num(f.Lines)) + tag(f.Test),
 		})
 	}
-	out := section("Most frequently changed (still in tree)") + "\n" + withNote(pathBarChart(hot, w), hotMore) + "\n" +
-		section("Largest files"+m.treeNote()) + "\n" + withNote(pathBarChart(big, w), bigMore) + "\n" +
-		section("Tests vs non-test code"+m.treeNote()) + "\n" + testSplit(l, w, all)
+	title := ""
+	if filter != allFiles {
+		title = " · " + filter.label()
+	}
+	sections := []string{
+		section("Most frequently changed (still in tree)"+title) + "\n" + withNote(fileChart(hot, w, filter), hotMore),
+		section("Largest files"+title+m.treeNote()) + "\n" + withNote(fileChart(big, w, filter), bigMore),
+	}
 	if l.Skipped > 0 {
-		out += "\n\n" + dimStyle.Render(fmt.Sprintf("%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped)))
+		sections = append(sections, "\n"+dimStyle.Width(w).Render(fmt.Sprintf(
+			"%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped))))
 	}
-	return out
+	return sections
 }
 
-// testSplit shows how much of the tree is tests, overall and per language.
-// Line counts only cover programming languages: a JSON fixture or a README in
-// a test folder says little about how well the code is tested.
-func testSplit(l loc.Result, w int, all bool) string {
-	if l.TestFiles == 0 {
-		return dimStyle.Width(w).Render("No test files found. Looked for test directories (tests/, __tests__/, spec/, …) " +
-			"and names like foo_test.go, foo.test.ts, test_foo.py, FooTest.java.")
+// fileChart is a pathBarChart that says when a filter has emptied it.
+func fileChart(rows []barRow, w int, filter fileFilter) string {
+	if len(rows) == 0 && filter != allFiles {
+		return dimStyle.Render("No " + strings.TrimSuffix(filter.label(), " only") + ".")
 	}
-	var code, testCode int
-	var langs []loc.Language
-	for _, lang := range l.Languages {
-		if !loc.IsCode(lang.Name) {
-			continue
-		}
-		code += lang.Code
-		testCode += lang.TestCode
-		if lang.TestFiles > 0 && lang.Code > 0 {
-			langs = append(langs, lang)
-		}
-	}
-	n, more := listCut(len(langs), 8, all)
-	langs = langs[:n]
-	tiles := flow([]string{
-		tile("Test files", fmt.Sprintf("%s of %s · %s", num(l.TestFiles), num(l.Files), pct(l.TestFiles, l.Files))),
-		tile("Test code lines", fmt.Sprintf("%s of %s · %s", num(testCode), num(code), pct(testCode, code))),
-	}, w)
-	note := dimStyle.Width(w).Render("Test files include fixtures and other files under test directories. Lines count " +
-		"only programming languages (excl. blank), not JSON, YAML, Markdown and the like. Tests written inline in source " +
-		"files (e.g. Rust's #[cfg(test)]) count as non-test.")
-	if len(langs) == 0 {
-		return tiles + "\n" + note
-	}
-
-	type row struct {
-		label, text, files string
-		share              float64
-	}
-	var rows []row
-	labelW, textW, filesW := 0, 0, 0
-	for _, lang := range langs {
-		r := row{
-			label: truncate(lang.Name, 16),
-			share: float64(lang.TestCode) / float64(lang.Code),
-			text:  fmt.Sprintf("%5s  %s of %s lines", pct(lang.TestCode, lang.Code), num(lang.TestCode), num(lang.Code)),
-			files: fmt.Sprintf("  · %s of %s files", num(lang.TestFiles), num(lang.Files)),
-		}
-		rows = append(rows, r)
-		labelW, textW, filesW = max(labelW, lipgloss.Width(r.label)), max(textW, lipgloss.Width(r.text)), max(filesW, lipgloss.Width(r.files))
-	}
-	// Drop the file counts when the bar would get too short to read.
-	withFiles := w-labelW-textW-filesW-4 >= 16
-	barW := w - labelW - textW - 4
-	if withFiles {
-		barW -= filesW
-	}
-	barW = max(barW, 4)
-
-	var b strings.Builder
-	for _, r := range rows {
-		filled := int(math.Round(r.share * float64(barW)))
-		if filled == 0 && r.share > 0 {
-			filled = 1
-		}
-		text := lipgloss.NewStyle().Width(textW).Render(r.text)
-		if withFiles {
-			text += r.files
-		}
-		fmt.Fprintf(&b, "%s  %s%s %s\n",
-			lipgloss.NewStyle().Width(labelW).Render(r.label),
-			addStyle.Render(strings.Repeat("█", filled)),
-			dimStyle.Render(strings.Repeat("░", barW-filled)),
-			dimStyle.Render(text))
-	}
-	return tiles + "\n" + section("Share of each language's code that is tests") + "\n" +
-		withNote(strings.TrimRight(b.String(), "\n"), more) + "\n" + note
+	return pathBarChart(rows, w)
 }
 
-func (m Model) pullRequestsRepo(r *repoState, w int) string {
+func (m Model) pullRequestsRepo(r *repoState, w int) []string {
 	fallback := dimStyle.Width(w).Render(fmt.Sprintf(
 		"From commit messages alone, history references ~%s PRs (merge commits and squash-merge titles like \"(#123)\").",
 		num(r.hist.PRsInHistory)))
 	switch {
 	case m.opts.NoRemote:
-		return dimStyle.Render("Remote lookups disabled (--no-remote).") + "\n\n" + fallback
+		return []string{dimStyle.Render("Remote lookups disabled (--no-remote).") + "\n\n" + fallback}
 	case !r.prDone:
-		return m.spin.View() + " Asking GitHub…\n\n" + fallback
+		return []string{m.spin.View() + " Asking GitHub…\n\n" + fallback}
 	case r.prErr != nil:
 		msg := lipgloss.NewStyle().Width(w).Render(errStyle.Render("Couldn't load PRs from GitHub: ") + r.prErr.Error())
-		return msg + "\n\n" + fallback
+		return []string{msg + "\n\n" + fallback}
 	}
 
 	p := r.prs
@@ -719,8 +714,9 @@ func (m Model) pullRequestsRepo(r *repoState, w int) string {
 	if m.windowed() {
 		out += "\n" + dimStyle.Width(w).Render("These come from GitHub and cover all time; the time window doesn't apply to them.")
 	}
+	sections := []string{out}
 	if len(rows) > 0 {
-		out += "\n" + section(fmt.Sprintf("Top PR authors (last %d merged)", p.Sample)) + "\n" + barChart(rows, w)
+		sections = append(sections, section(fmt.Sprintf("Top PR authors (last %d merged)", p.Sample))+"\n"+barChart(rows, w))
 	}
-	return out
+	return sections
 }

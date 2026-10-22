@@ -21,21 +21,25 @@ func sampleLocal() *report.Local {
 	now := time.Now()
 	var commits []gitlog.Commit
 	for i := range 60 {
+		files := []gitlog.FileChange{{Path: "some/really/long/path/to/a/file.go", Added: i, Deleted: 1}}
+		if i%2 == 0 {
+			files = append(files, gitlog.FileChange{Path: "some/really/long/path/to/a/file_test.go", Added: 3})
+		}
 		commits = append(commits, gitlog.Commit{
 			AuthorName: []string{"Ada", "Bob", "A very long author name indeed"}[i%3],
 			When:       now.AddDate(0, 0, -i*5),
 			Subject:    "change (#1)",
-			Files:      []gitlog.FileChange{{Path: "some/really/long/path/to/a/file.go", Added: i, Deleted: 1}},
+			Files:      files,
 		})
 	}
-	h := stats.Compute(commits, now, nil)
+	h := stats.Compute(commits, now, stats.Paths{IsTest: loc.IsTest})
 	h.LinesOverTime = stats.LinesOverTime(commits, 25000, nil)
 	h.PRSizes = stats.PRSizes(commits, nil, nil)
 	return &report.Local{
 		Repo: "demo", Branch: "main",
-		LOC: loc.Result{Files: 3, Code: 100, TestFiles: 1, TestCode: 30,
-			Languages: []loc.Language{{Name: "Go", Files: 2, Code: 90, TestFiles: 1, TestCode: 30}, {Name: "YAML", Files: 1, Code: 10}},
-			Largest:   []loc.File{{Path: "main.go", Lines: 90}}},
+		LOC: loc.Result{Files: 3, Code: 100,
+			Languages: []loc.Language{{Name: "Go", Files: 2, Code: 90}, {Name: "YAML", Files: 1, Code: 10}},
+			Largest:   []loc.File{{Path: "main.go", Lines: 60}, {Path: "main_test.go", Lines: 30, Test: true}}},
 		History: h, Commits: commits, Mainline: commits,
 	}
 }
@@ -66,6 +70,9 @@ func TestRenderAllTabs(t *testing.T) {
 		for _, size := range [][2]int{{120, 40}, {80, 24}, {64, 12}, {63, 30}, {10, 3}} {
 			var m tea.Model = New(Options{Roots: roots})
 			m, _ = m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			if size[0] == 120 { // side by side: fits for two repos, falls back for three
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+			}
 			for i, r := range c.repos {
 				if r.loaded {
 					m, _ = m.Update(localMsg{idx: i, data: r.local, err: r.err})
@@ -79,6 +86,9 @@ func TestRenderAllTabs(t *testing.T) {
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune('1' + i)}})
 				if i == activityTab {
 					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+				}
+				if i == filesTab && size[0] == 80 { // also cover the filtered lists
+					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 				out := m.View()
@@ -216,9 +226,9 @@ func TestChartHeight(t *testing.T) {
 	if got := m.(Model).chartH(); got != defaultChartH+chartStep {
 		t.Fatalf("height after + = %d", got)
 	}
-	// Three charts each grow by one step.
-	if got := lines(m) - before; got != 3*chartStep {
-		t.Errorf("body grew by %d lines, want %d", got, 3*chartStep)
+	// Every chart grows by one step.
+	if got, want := lines(m)-before, len(activityCharts)*chartStep; got != want {
+		t.Errorf("body grew by %d lines, want %d", got, want)
 	}
 	if !strings.Contains(m.(Model).header(), "↕ 16 rows") {
 		t.Errorf("header doesn't show the height")
@@ -282,7 +292,7 @@ func TestExpandLists(t *testing.T) {
 	for i := range 12 {
 		langs = append(langs, loc.Language{Name: fmt.Sprintf("Lang%d", i), Code: 100 - i})
 	}
-	local := &report.Local{Repo: "big", Branch: "main", History: stats.Compute(commits, now, nil), Commits: commits,
+	local := &report.Local{Repo: "big", Branch: "main", History: stats.Compute(commits, now, stats.Paths{}), Commits: commits,
 		LOC: loc.Result{Code: 1000, Languages: langs}}
 
 	var m tea.Model = New(Options{Roots: []string{"/src/big"}, NoRemote: true})
@@ -352,5 +362,207 @@ func TestPRSort(t *testing.T) {
 		if body := strings.Join(m.(Model).content, "\n"); !strings.Contains(body, want) {
 			t.Errorf("after s, header doesn't show %q", want)
 		}
+	}
+}
+
+func TestFileFilter(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	// rows lists the Files tab's list rows (the ones with a bar), trailing padding removed.
+	rows := func() []string {
+		var out []string
+		for _, line := range m.(Model).content {
+			if strings.Contains(line, "█") {
+				out = append(out, strings.TrimRight(line, " "))
+			}
+		}
+		return out
+	}
+	// describe summarizes rows as "path[+test]" for comparison.
+	describe := func() string {
+		var out []string
+		for _, r := range rows() {
+			name := strings.Fields(r)[0]
+			if strings.HasSuffix(r, " test") {
+				name += "+test"
+			}
+			out = append(out, name)
+		}
+		return strings.Join(out, " ")
+	}
+	const (
+		code = "some/really/long/path/to/a/file.go"
+		test = "some/really/long/path/to/a/file_test.go"
+	)
+
+	key('f')
+	if m.(Model).fileFilter != allFiles {
+		t.Errorf("f on Overview changed the filter")
+	}
+	key('4')
+	if got, want := describe(), code+" "+test+"+test main.go main_test.go+test"; got != want {
+		t.Errorf("all files = %q, want %q", got, want)
+	}
+
+	key('f')
+	if got, want := describe(), code+" main.go"; got != want {
+		t.Errorf("non-test files = %q, want %q", got, want)
+	}
+	if !strings.Contains(m.(Model).header(), "⚑ non-test files") {
+		t.Errorf("header doesn't show the filter")
+	}
+
+	key('f') // every row is a test, so none is tagged
+	if got, want := describe(), test+" main_test.go"; got != want {
+		t.Errorf("test files only = %q, want %q", got, want)
+	}
+
+	key('f')
+	if m.(Model).fileFilter != allFiles || strings.Contains(m.(Model).header(), "⚑") {
+		t.Errorf("f should cycle back to all files")
+	}
+}
+
+func TestSideBySide(t *testing.T) {
+	load := func(width, repos int) tea.Model {
+		var roots []string
+		for i := range repos {
+			roots = append(roots, fmt.Sprintf("/src/repo%d", i))
+		}
+		var m tea.Model = New(Options{Roots: roots, NoRemote: true})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+		for i := range repos {
+			m, _ = m.Update(localMsg{idx: i, data: sampleLocal()})
+		}
+		return m
+	}
+	key := func(m tea.Model, r rune) tea.Model {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return m
+	}
+	// headingRow is the first body line with a repo heading, and how many headings it holds.
+	headingRow := func(m tea.Model) int {
+		for _, line := range m.(Model).content {
+			if n := strings.Count(line, "● repo"); n > 0 {
+				return n
+			}
+		}
+		return 0
+	}
+
+	m := key(load(160, 2), '4')
+	if got := headingRow(m); got != 1 {
+		t.Errorf("stacked: first heading row has %d repos, want 1", got)
+	}
+	m = key(m, 'c')
+	if got := headingRow(m); got != 2 {
+		t.Errorf("side by side: first heading row has %d repos, want 2", got)
+	}
+	if !strings.Contains(m.(Model).header(), "▥ side by side") {
+		t.Errorf("header doesn't show side by side")
+	}
+	for _, line := range m.(Model).content {
+		if w := lipgloss.Width(line); w > 160 {
+			t.Errorf("line is %d wide: %q", w, line)
+			break
+		}
+	}
+
+	// Too narrow for columns: stays stacked and says so.
+	m = key(key(load(90, 2), '4'), 'c')
+	if got := headingRow(m); got != 1 || !strings.Contains(m.(Model).header(), "too narrow") {
+		t.Errorf("narrow: %d repos in a row, header %q", got, m.(Model).header())
+	}
+
+	// A single repo ignores c.
+	if m = key(load(160, 1), 'c'); m.(Model).sideBySide {
+		t.Errorf("c with one repo turned on side by side")
+	}
+}
+
+// Side by side, a section that's longer in one repo pushes the next section down in every column.
+func TestSideBySideAlignsSections(t *testing.T) {
+	big := sampleLocal()
+	h := &big.History
+	for i := range 30 {
+		h.Authors = append(h.Authors, stats.Author{Name: fmt.Sprintf("Extra %02d", i), Commits: 1})
+	}
+	for i := range 30 {
+		h.HotFiles = append(h.HotFiles, stats.File{Path: fmt.Sprintf("extra/file%02d.go", i), Commits: 1})
+	}
+
+	var m tea.Model = New(Options{Roots: []string{"/src/small", "/src/big"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	m, _ = m.Update(localMsg{idx: 1, data: big})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	// aligned checks that title starts a line in both columns.
+	aligned := func(title string) {
+		t.Helper()
+		for _, line := range m.(Model).content {
+			if n := strings.Count(line, title); n > 0 {
+				if n != 2 {
+					t.Errorf("%q is on different lines in the two columns", title)
+				}
+				return
+			}
+		}
+		t.Errorf("%q not found", title)
+	}
+
+	key('c')
+	key('2')
+	key('e') // show all 33 authors in one repo next to 3 in the other
+	aligned("PR size by author")
+	key('4')
+	aligned("Largest files")
+}
+
+// A repo's heading stays at the top of the body while its sections scroll past.
+func TestStickyHeadings(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/one", "/src/two"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	m, _ = m.Update(localMsg{idx: 1, data: sampleLocal()})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	// top is the first body line on screen after scrolling to line n.
+	top := func(n int) string {
+		t.Helper()
+		mm := m.(Model)
+		if n > mm.maxScroll() {
+			t.Fatalf("can't scroll to %d (max %d)", n, mm.maxScroll())
+		}
+		mm.scroll = n
+		return strings.Split(mm.View(), "\n")[lipgloss.Height(mm.header())]
+	}
+
+	key('2')
+	if hs := m.(Model).headings; len(hs) != 2 {
+		t.Fatalf("headings = %v, want one per repo", hs)
+	}
+	second := m.(Model).headings[1]
+	for n, want := range map[int]string{0: "● one", 5: "● one", second - 1: "● one", second: "● two", second + 3: "● two"} {
+		if got := top(n); !strings.Contains(got, want) {
+			t.Errorf("scrolled to %d: top line %q, want %q", n, got, want)
+		}
+	}
+
+	// Side by side, the one heading row stays pinned.
+	key('c')
+	if hs := m.(Model).headings; len(hs) != 1 {
+		t.Fatalf("side by side headings = %v, want one row", hs)
+	}
+	if got := top(8); !strings.Contains(got, "● one") || !strings.Contains(got, "● two") {
+		t.Errorf("side by side, scrolled: top line %q", got)
+	}
+
+	// A single repo has no headings to pin.
+	var single tea.Model = New(Options{Roots: []string{"/src/one"}, NoRemote: true})
+	single, _ = single.Update(tea.WindowSizeMsg{Width: 160, Height: 20})
+	single, _ = single.Update(localMsg{idx: 0, data: sampleLocal()})
+	if hs := single.(Model).headings; len(hs) != 0 {
+		t.Errorf("single repo headings = %v", hs)
 	}
 }

@@ -96,11 +96,11 @@ func CollectLocal(ctx context.Context, root, since string) (*Local, error) {
 
 // compute derives every history stat except LinesOverTime from the given commits.
 func (l *Local) compute(commits, mainline []gitlog.Commit, now time.Time) stats.Summary {
-	var exists func(string) bool
+	paths := stats.Paths{IsTest: loc.IsTest, Skip: loc.IsIgnored}
 	if l.tracked != nil {
-		exists = func(p string) bool { return l.tracked[p] && !loc.IsIgnored(p) }
+		paths.Exists = func(p string) bool { return l.tracked[p] && !loc.IsIgnored(p) }
 	}
-	s := stats.Compute(commits, now, exists)
+	s := stats.Compute(commits, now, paths)
 	s.PRSizes = stats.PRSizes(mainline, l.names, loc.IsIgnored)
 	return s
 }

@@ -21,17 +21,22 @@ func TestCount(t *testing.T) {
 	write("a_test.go", "package a\n\nfunc TestA() {}\n")
 
 	r := Count(dir, []string{"a.go", "b.go", "c.py", "bin.dat", "go.sum", "missing.go", "a_test.go"})
-	if r.Files != 4 || r.Lines != 9 || r.Blank != 3 || r.Code != 6 || r.TestFiles != 1 || r.TestCode != 2 {
+	if r.Files != 4 || r.Lines != 9 || r.Blank != 3 || r.Code != 6 {
 		t.Errorf("totals = %+v", r)
 	}
 	if r.Skipped != 3 {
 		t.Errorf("skipped = %d, want 3", r.Skipped)
 	}
-	if len(r.Languages) != 2 || r.Languages[0].Name != "Go" || r.Languages[0].Code != 5 || r.Languages[0].TestFiles != 1 {
+	if len(r.Languages) != 2 || r.Languages[0].Name != "Go" || r.Languages[0].Code != 5 {
 		t.Errorf("languages = %+v", r.Languages)
 	}
 	if r.Largest[0].Path != "a.go" { // ties break by path
 		t.Errorf("largest = %+v", r.Largest)
+	}
+	for _, f := range r.Largest {
+		if f.Test != (f.Path == "a_test.go") {
+			t.Errorf("%s: test = %v", f.Path, f.Test)
+		}
 	}
 }
 

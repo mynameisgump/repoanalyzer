@@ -38,8 +38,8 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--json` | print everything as JSON instead of opening the dashboard (an array when comparing) |
 | `--no-remote` | skip GitHub; PR counts fall back to an estimate from commit messages |
 
-Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap (when comparing),
-`+`/`-` make the Activity charts taller or shorter, `e` shows every row of the current tab's lists
+Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
+`+`/`-` make the Activity charts taller or shorter, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
 (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 ## Time window
@@ -50,7 +50,7 @@ compared repos, so their charts cover the same dates – and pressing it again g
 The active window shows at the right of the tab bar.
 
 Everything built from history follows the window: commits, contributors, authors, the Activity charts and heatmap,
-PR sizes and most-changed files. Lines of code, languages, largest files and tests vs non-test describe the current
+PR sizes, test shares and most-changed files. Lines of code, languages and largest files describe the current
 tree and say so; GitHub's PR numbers always cover all time. Unlike `--since`, switching windows doesn't re-read git:
 stats are recomputed from the history already loaded.
 
@@ -58,16 +58,20 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – lines of code, files, commits, contributors, repo age, merged PRs, languages, weekly commit sparkline
 - **Authors** – contributors by commits with share, lines added/removed, first/last commit, and average PR size (lines changed) per author
-- **Activity** – total lines over time, commits per week, average PR size per month, and a day × hour heatmap.
+- **Activity** – total lines over time, commits per week, average PR size per month, the share of each month's commits
+  that changed a test file, and a day × hour heatmap.
   `+`/`-` resize the line charts in 4-row steps (6 rows up to a full screen); taller charts show finer detail, not just bigger lines
-- **Files** – most frequently changed files, the largest files, and how much of the code is tests (overall and per language)
+- **Files** – most frequently changed files and the largest files, with test files tagged. `f` cycles all files →
+  non-test files → test files only
 - **Pull Requests** – open/merged/closed counts, median time to merge, top PR authors (via `gh`)
 
 ## Comparing repos
 
 Each repo gets its own color. The Activity tab overlays every repo on the same line charts
 (with a legend) and puts the heatmaps side by side; the Overview tab becomes a metric-by-repo
-table. Authors, Files and Pull Requests show one section per repo.
+table. Authors, Files and Pull Requests show one section per repo, stacked; `c` puts them side by side in columns
+instead (also the Overview's language lists). Columns need about 50 characters each, so on a narrower terminal
+they stay stacked and the header says so.
 
 ## How it works
 
@@ -76,7 +80,8 @@ table. Authors, Files and Pull Requests show one section per repo.
   The same pass gives PR sizes: a PR merge commit's first-parent diff (or a squash commit's diff) is the whole PR.
   Squash commits are credited to their author; merge commits to the author of the PR branch's last commit, since the merge itself is authored by whoever clicked merge.
 - `internal/loc` counts lines in `git ls-files` in parallel, skipping binaries, lockfiles and files >4MB.
-  Test files are recognized by path and name (`tests/`, `__tests__/`, `spec/`, `foo_test.go`, `foo.test.ts`, `test_foo.py`, `FooTest.java`, …).
+  Test files are recognized by path and name (`tests/`, `__tests__/`, `spec/`, `foo_test.go`, `foo.test.ts`, `test_foo.py`, `FooTest.java`, …);
+  tests written inside source files, like Rust's `#[cfg(test)]`, aren't.
 - `internal/stats` holds the pure aggregation logic (unit tested).
 - `internal/remote` queries GitHub's GraphQL API through `gh api`, so it uses your existing `gh auth login`.
 - `internal/ui` is the Bubble Tea dashboard; local stats show first and PR stats fill in when they arrive.

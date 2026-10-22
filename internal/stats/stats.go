@@ -26,6 +26,29 @@ type File struct {
 	Commits int    `json:"commits"`
 	Added   int    `json:"added"`
 	Deleted int    `json:"deleted"`
+	Test    bool   `json:"test,omitempty"`
+}
+
+// TestShare is how much of a set of commits went to test files. Merge commits
+// (which have no diff in this history) and skipped files like lockfiles are left out.
+type TestShare struct {
+	Commits     int `json:"commits"`      // commits that changed files
+	TestCommits int `json:"test_commits"` // of those, the ones that changed a test file
+	Added       int `json:"added"`        // lines added
+	TestAdded   int `json:"test_added"`   // of those, lines added to test files
+}
+
+func (t *TestShare) add(o TestShare) {
+	t.Commits += o.Commits
+	t.TestCommits += o.TestCommits
+	t.Added += o.Added
+	t.TestAdded += o.TestAdded
+}
+
+// MonthlyTests is one month's TestShare.
+type MonthlyTests struct {
+	Start time.Time `json:"start"`
+	TestShare
 }
 
 type Bucket struct {
@@ -58,6 +81,16 @@ type Summary struct {
 	PRsInHistory int `json:"prs_in_history"`
 	// PRSizes is filled in separately from mainline history; see PRSizes.
 	PRSizes PRSizeStats `json:"pr_sizes"`
+	Tests   TestShare   `json:"tests"`
+	// TestsMonthly is Tests per month, only for months with commits that changed files.
+	TestsMonthly []MonthlyTests `json:"tests_monthly"`
+}
+
+// Paths tells Compute what a path is. Any field may be nil.
+type Paths struct {
+	Exists func(string) bool // still in the tree; hot files keep only these
+	IsTest func(string) bool
+	Skip   func(string) bool // not written by anyone (lockfiles); left out of test shares
 }
 
 // PRSizeStats describes how big PRs were when they landed on the branch.
@@ -100,11 +133,12 @@ func prNumber(subject string) string {
 	return ""
 }
 
-// Compute aggregates commits. exists filters hot files down to paths still in the tree; nil keeps all.
-func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) Summary {
+// Compute aggregates commits.
+func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 	var s Summary
 	authors := map[string]*Author{}
 	files := map[string]*File{}
+	months := map[time.Time]*TestShare{}
 	prs := map[string]bool{}
 	active := map[string]bool{}
 	cutoff := now.AddDate(0, 0, -90)
@@ -136,6 +170,7 @@ func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) S
 			active[key] = true
 		}
 
+		var share TestShare
 		for _, f := range c.Files {
 			a.Added += f.Added
 			a.Deleted += f.Deleted
@@ -143,15 +178,33 @@ func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) S
 			s.Deleted += f.Deleted
 			hf := files[f.Path]
 			if hf == nil {
-				hf = &File{Path: f.Path}
+				hf = &File{Path: f.Path, Test: paths.IsTest != nil && paths.IsTest(f.Path)}
 				files[f.Path] = hf
 			}
 			hf.Commits++
 			hf.Added += f.Added
 			hf.Deleted += f.Deleted
+
+			if paths.Skip != nil && paths.Skip(f.Path) {
+				continue
+			}
+			share.Commits = 1
+			share.Added += f.Added
+			if hf.Test {
+				share.TestCommits = 1
+				share.TestAdded += f.Added
+			}
 		}
 
 		local := c.When.Local()
+		if share.Commits > 0 {
+			s.Tests.add(share)
+			month := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.Local)
+			if months[month] == nil {
+				months[month] = &TestShare{}
+			}
+			months[month].add(share)
+		}
 		s.Punchcard[(int(local.Weekday())+6)%7][local.Hour()]++
 
 		if n := prNumber(c.Subject); n != "" {
@@ -171,8 +224,13 @@ func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) S
 	s.ActiveAuthors90d = len(active)
 	s.PRsInHistory = len(prs)
 
+	for month, t := range months {
+		s.TestsMonthly = append(s.TestsMonthly, MonthlyTests{Start: month, TestShare: *t})
+	}
+	sort.Slice(s.TestsMonthly, func(i, j int) bool { return s.TestsMonthly[i].Start.Before(s.TestsMonthly[j].Start) })
+
 	for _, f := range files {
-		if exists == nil || exists(f.Path) {
+		if paths.Exists == nil || paths.Exists(f.Path) {
 			s.HotFiles = append(s.HotFiles, *f)
 		}
 	}
@@ -182,9 +240,19 @@ func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) S
 		}
 		return s.HotFiles[i].Path < s.HotFiles[j].Path
 	})
-	if len(s.HotFiles) > hotFileLimit {
-		s.HotFiles = s.HotFiles[:hotFileLimit]
+	// Keep the top of test and non-test files separately so either can be listed on its own.
+	kept, tests, others := s.HotFiles[:0], 0, 0
+	for _, f := range s.HotFiles {
+		n := &others
+		if f.Test {
+			n = &tests
+		}
+		if *n < hotFileLimit {
+			kept = append(kept, f)
+			*n++
+		}
 	}
+	s.HotFiles = kept
 
 	if len(commits) > 0 {
 		s.Weekly = Weekly(commits, s.First, s.Last)

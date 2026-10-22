@@ -1,6 +1,8 @@
 package stats
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +19,7 @@ func TestCompute(t *testing.T) {
 		{AuthorName: "Bob", When: day(200), Subject: "Initial",
 			Files: []gitlog.FileChange{{Path: "a.go", Added: 10}, {Path: "gone.go", Added: 3}}},
 	}
-	s := Compute(commits, now, func(p string) bool { return p != "gone.go" })
+	s := Compute(commits, now, Paths{Exists: func(p string) bool { return p != "gone.go" }})
 
 	if s.Commits != 3 || s.Added != 18 || s.Deleted != 1 {
 		t.Errorf("totals: %+v", s)
@@ -54,7 +56,7 @@ func TestCompute(t *testing.T) {
 }
 
 func TestComputeEmpty(t *testing.T) {
-	s := Compute(nil, time.Now(), nil)
+	s := Compute(nil, time.Now(), Paths{})
 	if s.Commits != 0 || s.Weekly != nil || len(s.Authors) != 0 {
 		t.Errorf("empty: %+v", s)
 	}
@@ -122,5 +124,60 @@ func TestPRSizes(t *testing.T) {
 	}
 	if empty := PRSizes(nil, nil, nil); empty.PRs != 0 || empty.Monthly != nil {
 		t.Errorf("empty = %+v", empty)
+	}
+}
+
+func TestTestShares(t *testing.T) {
+	jan := time.Date(2026, 1, 10, 12, 0, 0, 0, time.Local)
+	feb := time.Date(2026, 2, 3, 12, 0, 0, 0, time.Local)
+	commits := []gitlog.Commit{
+		{AuthorName: "Ada", When: feb, Files: []gitlog.FileChange{{Path: "a.go", Added: 30}, {Path: "a_test.go", Added: 10}}},
+		{AuthorName: "Ada", When: jan, Files: []gitlog.FileChange{{Path: "b.go", Added: 60}}},
+		{AuthorName: "Bob", When: jan, Files: []gitlog.FileChange{{Path: "b_test.go", Added: 20}, {Path: "go.sum", Added: 900}}},
+		{AuthorName: "Bob", When: jan, Files: []gitlog.FileChange{{Path: "go.sum", Added: 5}}}, // lockfile only: not counted
+		{AuthorName: "Bob", When: jan, Subject: "Merge branch 'x'"},                            // no diff: not counted
+	}
+	s := Compute(commits, jan, Paths{
+		IsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") },
+		Skip:   func(p string) bool { return p == "go.sum" },
+	})
+
+	if want := (TestShare{Commits: 3, TestCommits: 2, Added: 120, TestAdded: 30}); s.Tests != want {
+		t.Errorf("overall = %+v, want %+v", s.Tests, want)
+	}
+	if len(s.TestsMonthly) != 2 || s.TestsMonthly[0].Start.Month() != time.January ||
+		s.TestsMonthly[0].TestCommits != 1 || s.TestsMonthly[1].Commits != 1 {
+		t.Errorf("monthly = %+v", s.TestsMonthly)
+	}
+	for _, f := range s.HotFiles {
+		if f.Test != strings.HasSuffix(f.Path, "_test.go") {
+			t.Errorf("%s: test = %v", f.Path, f.Test)
+		}
+	}
+}
+
+// Hot files keep the top of tests and non-tests separately: sorted by path, the test
+// file would fall outside an overall top 50 and leave a tests-only list empty.
+func TestHotFilesKeepTests(t *testing.T) {
+	now := time.Now()
+	var commits []gitlog.Commit
+	for i := range hotFileLimit + 10 {
+		files := []gitlog.FileChange{{Path: fmt.Sprintf("f%02d.go", i)}}
+		if i == 0 {
+			files = append(files, gitlog.FileChange{Path: "x_test.go"})
+		}
+		for range 3 {
+			commits = append(commits, gitlog.Commit{When: now, Files: files})
+		}
+	}
+	s := Compute(commits, now, Paths{IsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") }})
+	tests := 0
+	for _, f := range s.HotFiles {
+		if f.Test {
+			tests++
+		}
+	}
+	if len(s.HotFiles) != hotFileLimit+1 || tests != 1 {
+		t.Errorf("kept %d files, %d tests", len(s.HotFiles), tests)
 	}
 }
