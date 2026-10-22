@@ -1,0 +1,11 @@
+# Build output: `go build -o bin/...` locally, GoReleaser's dist/ for releases.
+/bin/
+/dist/
+
+# Editor and OS clutter.
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
