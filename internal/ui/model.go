@@ -79,6 +79,8 @@ type Model struct {
 	// milliseconds (Activity draws several charts), so it's redone only when
 	// something shown changes; scrolling just moves a window over these lines.
 	content []string
+	// spots are the clickable parts of content, by line; see clickable.
+	spots map[int][]hotspot
 	// headings are the lines of content holding repo headings, which stay
 	// pinned at the top while their repo's sections scroll past.
 	headings []int
@@ -240,7 +242,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A click on something with a key presses that key; the wheel scrolls.
 		// Plain movement only moves the highlight, which View draws.
 		m.pointerX, m.pointerY, m.pointerSeen = msg.X, msg.Y, true
-		if key := m.mouse(msg); key != "" {
+		key := m.mouse(msg)
+		if by, ok := strings.CutPrefix(key, sortClick); ok {
+			m.prSort = prSortKey(by[0] - '0')
+			break
+		}
+		if key != "" {
 			return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 		}
 		rerender = false
@@ -257,6 +264,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) render() {
 	m.columnsOn = m.fitColumns()
 	m.content = strings.Split(m.body(), "\n")
+	m.spots = map[int][]hotspot{}
+	for n, line := range m.content {
+		if strings.Contains(line, markPrefix) {
+			m.content[n], m.spots[n] = takeSpots(line)
+		}
+	}
 	m.headings = m.headingLines()
 	m.scroll = min(m.scroll, m.maxScroll())
 }
@@ -317,11 +330,13 @@ func (m Model) View() string {
 	if m.width < 64 || m.height < 12 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dimStyle.Render("window too small"))
 	}
-	visible := m.visibleLines()
-	if row := m.pointerY - lipgloss.Height(m.header()); m.pointerSeen && row >= 0 && row < len(visible) {
-		// visible can share content's lines, so copy before highlighting one.
-		visible = slices.Clone(visible)
-		visible[row] = m.highlight(visible[row], 0, noteSpots(visible[row], m.pointerY)...)
+	var visible []string
+	for _, n := range m.visibleRows() {
+		visible = append(visible, m.content[n])
+	}
+	if spots := m.bodySpots(m.pointerY); m.pointerSeen && len(spots) > 0 {
+		row := m.pointerY - lipgloss.Height(m.header())
+		visible[row] = m.highlight(visible[row], 0, spots...)
 	}
 	for len(visible) < m.bodyHeight() {
 		visible = append(visible, "")
@@ -329,17 +344,33 @@ func (m Model) View() string {
 	return m.header() + "\n" + strings.Join(visible, "\n") + "\n" + m.footer()
 }
 
-// visibleLines is the part of content the body shows at the current scroll,
-// with the sticky heading pinned over its top line.
-func (m Model) visibleLines() []string {
-	lines := m.content
+// visibleRows is the line of content each body row shows at the current
+// scroll, with the sticky heading pinned over the top one.
+func (m Model) visibleRows() []int {
 	h := m.bodyHeight()
-	off := min(m.scroll, max(len(lines)-h, 0))
-	visible := lines[off:min(off+h, len(lines))]
-	if top := m.stickyHeading(off); top >= 0 && len(visible) > 0 {
-		visible = append([]string{lines[top]}, visible[1:]...)
+	off := min(m.scroll, max(len(m.content)-h, 0))
+	var rows []int
+	for n := off; n < min(off+h, len(m.content)); n++ {
+		rows = append(rows, n)
 	}
-	return visible
+	if top := m.stickyHeading(off); top >= 0 && len(rows) > 0 {
+		rows[0] = top
+	}
+	return rows
+}
+
+// bodySpots are the clickable parts of the body row on screen line y.
+func (m Model) bodySpots(y int) []hotspot {
+	rows := m.visibleRows()
+	row := y - lipgloss.Height(m.header())
+	if row < 0 || row >= len(rows) {
+		return nil
+	}
+	spots := slices.Clone(m.spots[rows[row]])
+	for i := range spots {
+		spots[i].y = y
+	}
+	return spots
 }
 
 func (m Model) header() string {
@@ -443,11 +474,12 @@ func (m Model) footer() string {
 	return s
 }
 
-// footerLayout renders the key hints along with where each one is, so a
-// click on a hint can press its key.
+// footerLayout renders a hint for every control that does something right
+// now, wrapping onto more lines rather than leaving any out, along with where
+// each hint is, so a click on one can press its key.
 func (m Model) footerLayout() (string, []hotspot) {
 	type hint struct{ text, key string }
-	keys := []hint{{"←/→ tabs", ""}, {"↑/↓ scroll", ""}, {"t window", "t"}}
+	keys := []hint{{"←/→ tabs", ""}, {"↑/↓ scroll", ""}, {"pgup/pgdn page", ""}, {"t window", "t"}}
 	if m.comparing() {
 		keys = append(keys, hint{"o overlap", "o"}, hint{"c columns", "c"})
 	}
@@ -460,46 +492,66 @@ func (m Model) footerLayout() (string, []hotspot) {
 	if m.tab == filesTab {
 		keys = append(keys, hint{"f test filter", "f"})
 	}
+	switch {
+	case !m.expandable():
+	case m.showAll():
+		keys = append(keys, hint{"e show fewer", "e"})
+	default:
+		keys = append(keys, hint{"e show all", "e"})
+	}
 	keys = append(keys, hint{"q quit", "q"})
 	prefix := " "
 	if m.loading() {
 		prefix = " " + m.spin.View() + " loading… · "
 	}
-	join := func() string {
-		var texts []string
-		for _, k := range keys {
-			texts = append(texts, k.text)
+
+	// Lay the hints out first, then place the lines at the bottom of the screen.
+	sep := " · "
+	type placed struct {
+		hint
+		line, x int
+	}
+	var hints []placed
+	line, x := 0, lipgloss.Width(prefix)
+	for i, k := range keys {
+		if i > 0 {
+			x += lipgloss.Width(sep)
 		}
-		return prefix + strings.Join(texts, " · ")
+		if w := lipgloss.Width(k.text); i > 0 && x+w > m.width {
+			line, x = line+1, 1
+		}
+		hints = append(hints, placed{k, line, x})
+		x += lipgloss.Width(k.text)
 	}
-	// Drop the navigation hints first if everything won't fit.
-	help := join()
-	for len(keys) > 4 && lipgloss.Width(help) > m.width {
-		keys = keys[1:]
-		help = join()
-	}
+	top := m.height - (line + 1)
+
 	// A one-key hint is clickable all over; with several keys, each is
 	// clickable where it appears in the text.
-	y := m.height - 1
 	var spots []hotspot
-	var parts []string
-	x := lipgloss.Width(prefix)
-	for _, k := range keys {
+	lines := make([]string, line+1)
+	lines[0] = dimStyle.Render(prefix)
+	for i, h := range hints {
+		y := top + h.line
 		var own []hotspot
-		if len(k.key) == 1 {
-			own = append(own, hotspot{y: y, x: x, w: lipgloss.Width(k.text), key: k.key})
+		if len(h.key) == 1 {
+			own = append(own, hotspot{y: y, x: h.x, w: lipgloss.Width(h.text), key: h.key})
 		} else {
-			for _, r := range k.key {
-				at := strings.IndexRune(k.text, r)
-				own = append(own, hotspot{y: y, x: x + lipgloss.Width(k.text[:at]), w: 1, key: string(r)})
+			for _, r := range h.key {
+				at := strings.IndexRune(h.text, r)
+				own = append(own, hotspot{y: y, x: h.x + lipgloss.Width(h.text[:at]), w: 1, key: string(r)})
 			}
 		}
-		parts = append(parts, m.highlight(dimStyle.Render(k.text), x, own...))
+		switch {
+		case i == 0:
+		case h.line == hints[i-1].line:
+			lines[h.line] += dimStyle.Render(sep)
+		default:
+			lines[h.line] = " "
+		}
+		lines[h.line] += m.highlight(dimStyle.Render(h.text), h.x, own...)
 		spots = append(spots, own...)
-		x += lipgloss.Width(k.text) + lipgloss.Width(" · ")
 	}
-	help = dimStyle.Render(prefix) + strings.Join(parts, dimStyle.Render(" · "))
-	return lipgloss.NewStyle().MaxWidth(m.width).Render(help), spots
+	return lipgloss.NewStyle().MaxWidth(m.width).Render(strings.Join(lines, "\n")), spots
 }
 
 // body renders the active tab, padded one column from the left edge.

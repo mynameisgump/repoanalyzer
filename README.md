@@ -40,11 +40,11 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--all-files` | count data, config and docs too (JSON, CSV, YAML, Markdown, Godot scenes, …); by default only code counts |
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
-Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
+Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
 `+`/`-` make the Activity charts taller or shorter, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
 (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
-Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does; anything clickable lights up under the pointer.
+Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, and clicking a column title in PR size by author sorts by it; anything clickable lights up under the pointer.
 While the dashboard has the mouse, hold Shift (Option in iTerm2) to select text, or run with `--no-mouse`.
 
 ## Time window

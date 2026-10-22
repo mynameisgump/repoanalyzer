@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"regexp"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -12,7 +12,8 @@ import (
 const wheelStep = 3
 
 // hotspot is a clickable stretch of screen line y, w cells wide from column x.
-// Clicking it presses key; an empty key does nothing.
+// Clicking it presses key, or does a click-only action like sortClick; an
+// empty key does nothing.
 type hotspot struct {
 	y, x, w int
 	key     string
@@ -22,18 +23,48 @@ func (h hotspot) hit(x, y int) bool {
 	return h.key != "" && y == h.y && x >= h.x && x < h.x+h.w
 }
 
-// expandNote matches listCut's notes, which e answers.
-var expandNote = regexp.MustCompile(`(\+ [\d,]+ more · )?e to show (all|fewer)`)
+// sortClick followed by a prSortKey digit sorts PR size by author by that column.
+const sortClick = "sort:"
 
-// noteSpots finds the listCut notes on a body line shown at screen line y.
-func noteSpots(line string, y int) []hotspot {
-	plain := ansi.Strip(line)
+// The body is drawn once and then scrolled, so its clickable parts are marked
+// in the text as it's drawn, with zero-width escape sequences that layout
+// passes over. render takes the marks out again and keeps where they were.
+const (
+	markPrefix = "\x1b]7777"
+	markOpen   = markPrefix + ";" // then the key and markEnd
+	markEnd    = "\a"
+	markClose  = markPrefix + markEnd
+)
+
+// clickable marks s in body text so a click on it presses key.
+func clickable(key, s string) string {
+	return markOpen + key + markEnd + s + markClose
+}
+
+// takeSpots removes the clickable marks from a line of content, returning
+// the line and where the marked parts are (y is left for bodySpots).
+func takeSpots(line string) (string, []hotspot) {
 	var spots []hotspot
-	for _, loc := range expandNote.FindAllStringIndex(plain, -1) {
-		x := ansi.StringWidth(plain[:loc[0]])
-		spots = append(spots, hotspot{y: y, x: x, w: ansi.StringWidth(plain[loc[0]:loc[1]]), key: "e"})
+	for {
+		i := strings.Index(line, markOpen)
+		if i < 0 {
+			break
+		}
+		rest := line[i+len(markOpen):]
+		k := strings.Index(rest, markEnd)
+		if k < 0 {
+			break
+		}
+		key := rest[:k]
+		line = line[:i] + rest[k+len(markEnd):]
+		// A mark cut off by wrapping runs to the end of the line.
+		j := strings.Index(line[i:], markClose)
+		if j < 0 {
+			j = len(line) - i
+		}
+		spots = append(spots, hotspot{x: ansi.StringWidth(line[:i]), w: ansi.StringWidth(line[i : i+j]), key: key})
 	}
-	return spots
+	return strings.ReplaceAll(line, markClose, ""), spots
 }
 
 // highlight redraws whichever of spots the pointer is over within s, a
@@ -69,13 +100,13 @@ func (m *Model) mouse(msg tea.MouseMsg) string {
 	}
 
 	header, spots := m.headerLayout()
-	headerH := lipgloss.Height(header)
-	switch visible := m.visibleLines(); {
-	case msg.Y < headerH:
-	case msg.Y == m.height-1:
-		_, spots = m.footerLayout()
-	case msg.Y-headerH < len(visible):
-		spots = noteSpots(visible[msg.Y-headerH], msg.Y)
+	footer, footerSpots := m.footerLayout()
+	switch {
+	case msg.Y < lipgloss.Height(header):
+	case msg.Y >= m.height-lipgloss.Height(footer):
+		spots = footerSpots
+	default:
+		spots = m.bodySpots(msg.Y)
 	}
 	for _, s := range spots {
 		if s.hit(msg.X, msg.Y) {

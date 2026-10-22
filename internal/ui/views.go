@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -385,6 +386,9 @@ func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool, sortBy prSort
 		title := style.Render(text)
 		if barW == 0 {
 			title = style.Width(colW).Align(lipgloss.Right).Render(text)
+		}
+		if prSortKey(i) != sortBy {
+			title = clickable(sortClick+strconv.Itoa(i), title)
 		}
 		if i < len(cols)-1 {
 			title = lipgloss.NewStyle().Width(colW + gap).Render(title)
