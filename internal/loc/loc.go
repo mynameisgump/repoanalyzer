@@ -17,6 +17,9 @@ import (
 // Files larger than this are assumed to be data or generated and are skipped.
 const maxFileSize = 4 << 20
 
+// How many of the largest files Result.Largest keeps.
+const largestLimit = 50
+
 // Lockfiles are tracked but are not code anyone wrote, so they'd skew the totals.
 var ignoredNames = map[string]bool{
 	"package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true, "bun.lockb": true,
@@ -155,8 +158,8 @@ func Count(root string, paths []string) Result {
 		}
 		return files[i].Path < files[j].Path
 	})
-	if len(files) > 15 {
-		files = files[:15]
+	if len(files) > largestLimit {
+		files = files[:largestLimit]
 	}
 	r.Largest = files
 	return r

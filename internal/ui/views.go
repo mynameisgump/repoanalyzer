@@ -23,7 +23,8 @@ func (m Model) overview(w int) string {
 	if !m.comparing() {
 		return m.each(w, m.overviewRepo)
 	}
-	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + m.each(w, languages)
+	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" +
+		m.each(w, func(r *repoState, w int) string { return languages(r, w, m.showAll()) })
 }
 
 func (m Model) overviewRepo(r *repoState, w int) string {
@@ -47,7 +48,7 @@ func (m Model) overviewRepo(r *repoState, w int) string {
 		tile(prLabel, m.prValue(r)),
 	}, w)
 
-	out := tiles + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + languages(r, w)
+	out := tiles + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + languages(r, w, m.showAll())
 	if len(h.Weekly) > 1 {
 		out += "\n" + section("Commits per week") + "\n" + weeklySparkline(h.Weekly, w, r.color)
 	}
@@ -144,24 +145,18 @@ func (m Model) anyPRFallback() bool {
 	return false
 }
 
-func languages(r *repoState, w int) string {
+func languages(r *repoState, w int, all bool) string {
 	l := r.local.LOC
+	n, note := listCut(len(l.Languages), 10, all)
 	var rows []barRow
-	for i, lang := range l.Languages {
-		if i == 10 {
-			break
-		}
+	for _, lang := range l.Languages[:n] {
 		rows = append(rows, barRow{
 			label: lang.Name,
 			value: float64(lang.Code),
 			text:  fmt.Sprintf("%9s  %5s", num(lang.Code), pct(lang.Code, l.Code)),
 		})
 	}
-	out := barChart(rows, w)
-	if extra := len(l.Languages) - len(rows); extra > 0 {
-		out += "\n" + dimStyle.Render(fmt.Sprintf("+ %d more", extra))
-	}
-	return out
+	return withNote(barChart(rows, w), note)
 }
 
 func weeklySparkline(weeks []stats.Bucket, w int, color lipgloss.TerminalColor) string {
@@ -187,11 +182,11 @@ func (m Model) authors(w int) string {
 	if m.comparing() {
 		limit = 15 // keep both repos within a reasonable scroll
 	}
-	windowed := m.windowed()
-	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed) })
+	windowed, all := m.windowed(), m.showAll()
+	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed, all) })
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed bool) string {
+func authorsRepo(r *repoState, w, limit int, windowed, all bool) string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
@@ -206,7 +201,8 @@ func authorsRepo(r *repoState, w, limit int, windowed bool) string {
 	summary := fmt.Sprintf("%s contributors · %s active in %s",
 		boldStyle.Render(num(len(h.Authors))), boldStyle.Render(num(h.ActiveAuthors90d)), recent)
 
-	authors := h.Authors[:min(len(h.Authors), limit)]
+	n, more := listCut(len(h.Authors), limit, all)
+	authors := h.Authors[:n]
 	// On narrow terminals drop the share bar and first-commit date so the table fits.
 	wide := w >= 110
 	nameW := min(28, max(w/4, 12))
@@ -252,19 +248,17 @@ func authorsRepo(r *repoState, w, limit int, windowed bool) string {
 	if lipgloss.Width(rendered) > w {
 		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
 	}
-	out := summary + "\n" + rendered
-	if len(h.Authors) > limit {
-		out += "\n" + dimStyle.Render(fmt.Sprintf("+ %d more (use --json for the full list)", len(h.Authors)-limit))
-	}
+	out := withNote(summary+"\n"+rendered, more)
 	if len(h.PRSizes.ByAuthor) > 0 {
-		out += "\n" + section("PR size by author (lines changed per PR)") + "\n" + prSizesByAuthor(h.PRSizes, w, min(limit, 10))
+		out += "\n" + section("PR size by author (lines changed per PR)") + "\n" + prSizesByAuthor(h.PRSizes, w, min(limit, 10), all)
 	}
 	return out
 }
 
 // prSizesByAuthor charts each author's average PR size, most prolific first.
-func prSizesByAuthor(ps stats.PRSizeStats, w, limit int) string {
-	authors := ps.ByAuthor[:min(len(ps.ByAuthor), limit)]
+func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool) string {
+	n, more := listCut(len(ps.ByAuthor), limit, all)
+	authors := ps.ByAuthor[:n]
 	labelW := 0
 	for _, a := range authors {
 		labelW = max(labelW, min(lipgloss.Width(a.Name), 24))
@@ -301,11 +295,7 @@ func prSizesByAuthor(ps stats.PRSizeStats, w, limit int) string {
 	for i, a := range authors {
 		rows = append(rows, barRow{label: a.Name, value: a.MeanLines, text: text[i]})
 	}
-	out := barChart(rows, w)
-	if more := len(ps.ByAuthor) - len(authors); more > 0 {
-		out += "\n" + dimStyle.Render(fmt.Sprintf("+ %d more (use --json for the full list)", more))
-	}
-	return out + "\n" + dimStyle.Width(w).Render("Lines added + deleted per PR merged into this branch (excl. lockfiles). "+
+	return withNote(barChart(rows, w), more) + "\n" + dimStyle.Width(w).Render("Lines added + deleted per PR merged into this branch (excl. lockfiles). "+
 		"Merge commits count for the PR branch's author, not whoever merged. A few huge PRs pull the average up; the median is the typical PR.")
 }
 
@@ -528,25 +518,28 @@ func punchcard(grid [7][24]int, cellW int) string {
 func (m Model) filesRepo(r *repoState, w int) string {
 	h, l := r.hist, r.local.LOC
 
+	all := m.showAll()
+	nHot, hotMore := listCut(len(h.HotFiles), 15, all)
 	var hot []barRow
-	for _, f := range h.HotFiles[:min(len(h.HotFiles), 15)] {
+	for _, f := range h.HotFiles[:nHot] {
 		hot = append(hot, barRow{
 			label: f.Path,
 			value: float64(f.Commits),
 			text:  fmt.Sprintf("%5s commits  %s %s", num(f.Commits), addStyle.Render("+"+num(f.Added)), delStyle.Render("-"+num(f.Deleted))),
 		})
 	}
+	nBig, bigMore := listCut(len(l.Largest), 15, all)
 	var big []barRow
-	for _, f := range l.Largest {
+	for _, f := range l.Largest[:nBig] {
 		big = append(big, barRow{
 			label: f.Path,
 			value: float64(f.Lines),
 			text:  fmt.Sprintf("%7s lines", num(f.Lines)),
 		})
 	}
-	out := section("Most frequently changed (still in tree)") + "\n" + pathBarChart(hot, w) + "\n" +
-		section("Largest files"+m.treeNote()) + "\n" + pathBarChart(big, w) + "\n" +
-		section("Tests vs non-test code"+m.treeNote()) + "\n" + testSplit(l, w)
+	out := section("Most frequently changed (still in tree)") + "\n" + withNote(pathBarChart(hot, w), hotMore) + "\n" +
+		section("Largest files"+m.treeNote()) + "\n" + withNote(pathBarChart(big, w), bigMore) + "\n" +
+		section("Tests vs non-test code"+m.treeNote()) + "\n" + testSplit(l, w, all)
 	if l.Skipped > 0 {
 		out += "\n\n" + dimStyle.Render(fmt.Sprintf("%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped)))
 	}
@@ -556,7 +549,7 @@ func (m Model) filesRepo(r *repoState, w int) string {
 // testSplit shows how much of the tree is tests, overall and per language.
 // Line counts only cover programming languages: a JSON fixture or a README in
 // a test folder says little about how well the code is tested.
-func testSplit(l loc.Result, w int) string {
+func testSplit(l loc.Result, w int, all bool) string {
 	if l.TestFiles == 0 {
 		return dimStyle.Width(w).Render("No test files found. Looked for test directories (tests/, __tests__/, spec/, …) " +
 			"and names like foo_test.go, foo.test.ts, test_foo.py, FooTest.java.")
@@ -569,10 +562,12 @@ func testSplit(l loc.Result, w int) string {
 		}
 		code += lang.Code
 		testCode += lang.TestCode
-		if lang.TestFiles > 0 && lang.Code > 0 && len(langs) < 8 {
+		if lang.TestFiles > 0 && lang.Code > 0 {
 			langs = append(langs, lang)
 		}
 	}
+	n, more := listCut(len(langs), 8, all)
+	langs = langs[:n]
 	tiles := flow([]string{
 		tile("Test files", fmt.Sprintf("%s of %s · %s", num(l.TestFiles), num(l.Files), pct(l.TestFiles, l.Files))),
 		tile("Test code lines", fmt.Sprintf("%s of %s · %s", num(testCode), num(code), pct(testCode, code))),
@@ -625,7 +620,7 @@ func testSplit(l loc.Result, w int) string {
 			dimStyle.Render(text))
 	}
 	return tiles + "\n" + section("Share of each language's code that is tests") + "\n" +
-		strings.TrimRight(b.String(), "\n") + "\n" + note
+		withNote(strings.TrimRight(b.String(), "\n"), more) + "\n" + note
 }
 
 func (m Model) pullRequestsRepo(r *repoState, w int) string {

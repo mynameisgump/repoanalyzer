@@ -270,3 +270,44 @@ func TestScrollDoesNotRerender(t *testing.T) {
 		t.Errorf("changing the time window didn't re-render")
 	}
 }
+
+func TestExpandLists(t *testing.T) {
+	now := time.Now()
+	var commits []gitlog.Commit
+	for i := range 60 {
+		commits = append(commits, gitlog.Commit{AuthorName: fmt.Sprintf("Author %02d", i), When: now.AddDate(0, 0, -i)})
+	}
+	var langs []loc.Language
+	for i := range 12 {
+		langs = append(langs, loc.Language{Name: fmt.Sprintf("Lang%d", i), Code: 100 - i})
+	}
+	local := &report.Local{Repo: "big", Branch: "main", History: stats.Compute(commits, now, nil), Commits: commits,
+		LOC: loc.Result{Code: 1000, Languages: langs}}
+
+	var m tea.Model = New(Options{Roots: []string{"/src/big"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m, _ = m.Update(localMsg{idx: 0, data: local})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	body := func() string { return strings.Join(m.(Model).content, "\n") }
+
+	key('2')
+	if !strings.Contains(body(), "+ 10 more · e to show all") || strings.Contains(body(), "Author 59") {
+		t.Fatalf("authors should stop at 50 with a hint")
+	}
+	key('e')
+	if !strings.Contains(body(), "Author 59") || !strings.Contains(body(), "e to show fewer") {
+		t.Errorf("e should show every author")
+	}
+
+	// Expanding is per tab: Overview's languages are still cut.
+	key('1')
+	if !strings.Contains(body(), "+ 2 more · e to show all") {
+		t.Errorf("overview should still be collapsed")
+	}
+
+	key('2')
+	key('e')
+	if strings.Contains(body(), "Author 59") || !strings.Contains(body(), "+ 10 more") {
+		t.Errorf("a second e should collapse the authors again")
+	}
+}

@@ -64,6 +64,7 @@ type Model struct {
 	window        windowMode
 	beforeOverlap windowMode // what o returns to
 	chartHeight   int        // Activity line chart rows; 0 means defaultChartH
+	expanded      uint8      // bit per tab: e shows every row of that tab's lists
 	// content is the rendered body, split into lines. Rendering a tab can take
 	// milliseconds (Activity draws several charts), so it's redone only when
 	// something shown changes; scrolling just moves a window over these lines.
@@ -183,6 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.tab == activityTab {
 				m.resizeCharts(-chartStep)
 			}
+		case "e":
+			m.expanded ^= 1 << m.tab
+			rerender = true
 		case "t":
 			m.window = m.window.next(m.comparing())
 			m.applyWindow()

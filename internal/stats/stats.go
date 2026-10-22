@@ -83,7 +83,7 @@ type MonthlyAvg struct {
 	AvgLines float64   `json:"avg_lines"`
 }
 
-const hotFileLimit = 25
+const hotFileLimit = 50
 
 var prPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^Merge pull request #(\d+)`),

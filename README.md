@@ -31,7 +31,8 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-remote` | skip GitHub; PR counts fall back to an estimate from commit messages |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap (when comparing),
-`+`/`-` make the Activity charts taller or shorter, `q` quits.
+`+`/`-` make the Activity charts taller or shorter, `e` shows every row of the current tab's lists
+(wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 ## Time window
 
