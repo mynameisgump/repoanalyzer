@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss/table"
 
 	"github.com/mynameisgump/repoanalyzer/internal/loc"
+	"github.com/mynameisgump/repoanalyzer/internal/remote"
 	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
@@ -22,16 +23,60 @@ func section(title string) string {
 	return sectionStyle.Render(title)
 }
 
+// overview is each repo's tiles, languages and weekly commits: side by side in
+// columns when comparing with c on, else stacked.
 func (m Model) overview(w int) string {
-	if !m.comparing() {
-		return m.each(w, oneSection(m.overviewRepo))
-	}
-	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" +
-		m.each(w, func(r *repoState, w int) []string { return []string{languages(r, w, m.showAll())} })
+	widths := m.tileWidths(m.overviewFigures)
+	return m.each(w, func(r *repoState, w int) []string { return m.overviewRepo(r, w, widths) })
 }
 
-func (m Model) overviewRepo(r *repoState, w int) string {
-	l, h := r.local.LOC, r.hist
+func (m Model) overviewRepo(r *repoState, w int, widths []int) []string {
+	sections := []string{
+		flow(figureTiles(m.overviewFigures(r), widths), w),
+		section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + languages(r, w, m.showAll()),
+	}
+	if h := r.hist; len(h.Weekly) > 1 {
+		sections = append(sections, section("Commits per week")+"\n"+weeklySparkline(h.Weekly, w, r.color))
+	}
+	return sections
+}
+
+// figure is one tile's label and value.
+type figure struct{ label, value string }
+
+// tileWidths sizes each of figures' tiles to its widest version in any loaded
+// repo, so side by side the repos' grids wrap the same way and every tile
+// lines up with its counterpart.
+func (m Model) tileWidths(figures func(*repoState) []figure) []int {
+	var widths []int
+	for i := range m.repos {
+		r := &m.repos[i]
+		if r.local == nil || r.localErr != nil {
+			continue
+		}
+		for k, f := range figures(r) {
+			if k == len(widths) {
+				widths = append(widths, 0)
+			}
+			widths[k] = max(widths[k], lipgloss.Width(f.label), lipgloss.Width(f.value))
+		}
+	}
+	return widths
+}
+
+// figureTiles draws figures as tiles with the widths from tileWidths.
+func figureTiles(fs []figure, widths []int) []string {
+	var tiles []string
+	for k, f := range fs {
+		tiles = append(tiles, tileStyle.Width(widths[k]+2).Render(dimStyle.Render(f.label)+"\n"+tileValueStyle.Render(f.value)))
+	}
+	return tiles
+}
+
+// overviewFigures are a repo's tiles on the overview. Every repo gets the same
+// ones in the same order, so side by side they line up.
+func (m Model) overviewFigures(r *repoState) []figure {
+	h := r.hist
 	// Age is the repo's, not the time window's.
 	age := "—"
 	if r.local.History.Commits > 0 {
@@ -41,21 +86,65 @@ func (m Model) overviewRepo(r *repoState, w int) string {
 	if r.prs == nil && r.prDone || m.opts.NoRemote {
 		prLabel = "PRs (from history)"
 	}
-	tiles := flow([]string{
-		tile("Lines of code", num(l.Code)),
-		tile("Files", num(l.Files)),
-		tile("Commits", num(h.Commits)),
-		tile("Contributors", num(len(h.Authors))),
-		tile("Active (90d)", num(h.ActiveAuthors90d)),
-		tile("Repo age", age),
-		tile(prLabel, m.prValue(r)),
-	}, w)
-
-	out := tiles + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + languages(r, w, m.showAll())
-	if len(h.Weekly) > 1 {
-		out += "\n" + section("Commits per week") + "\n" + weeklySparkline(h.Weekly, w, r.color)
+	prSize := "—"
+	if h.PRSizes.PRs > 0 {
+		prSize = num(h.PRSizes.MedianLines) + " lines"
 	}
-	return out
+	testShare := "—"
+	if h.Tests.Added > 0 {
+		testShare = pct(h.Tests.TestAdded, h.Tests.Added)
+	}
+	figures := []figure{
+		{"Lines of code", num(r.local.LOC.Code)},
+		{"Files", num(r.local.LOC.Files)},
+		{"Commits", num(h.Commits)},
+		{"Last commit", ago(h.Last)},
+		{"Lines added", "+" + num(h.Added)},
+		{"Lines deleted", "-" + num(h.Deleted)},
+		{"Contributors", num(len(h.Authors))},
+		{"Active (90d)", num(h.ActiveAuthors90d)},
+		{"Repo age", age},
+		{prLabel, m.prValue(r)},
+	}
+	if m.anyGitHub() {
+		figures = append(figures, figure{"Open PRs", m.gitHubValue(r, func(p *remote.PRStats) string { return num(p.Open) })})
+	}
+	figures = append(figures, figure{"Median PR size", prSize})
+	if m.anyGitHub() {
+		figures = append(figures, figure{"Median time to merge", m.gitHubValue(r, func(p *remote.PRStats) string {
+			if p.Sample == 0 {
+				return "—"
+			}
+			return humanSpan(time.Duration(p.MedianHoursToMerge * float64(time.Hour)))
+		})})
+	}
+	return append(figures, figure{"Lines added to tests", testShare})
+}
+
+// anyGitHub reports whether any repo has, or may yet get, PR stats from GitHub;
+// the figures only GitHub knows are left off the overview otherwise.
+func (m Model) anyGitHub() bool {
+	if m.opts.NoRemote {
+		return false
+	}
+	for _, r := range m.repos {
+		if r.prs != nil || !r.prDone {
+			return true
+		}
+	}
+	return false
+}
+
+// gitHubValue is a figure from a repo's GitHub PR stats, "…" while they load
+// and "—" if they couldn't be.
+func (m Model) gitHubValue(r *repoState, value func(*remote.PRStats) string) string {
+	switch {
+	case r.prs != nil:
+		return value(r.prs)
+	case !r.prDone:
+		return "…"
+	}
+	return "—"
 }
 
 // prValue is the merged-PR count, an estimate from history, or "…" while loading.
@@ -67,85 +156,6 @@ func (m Model) prValue(r *repoState) string {
 		return "~" + num(r.hist.PRsInHistory)
 	}
 	return "…"
-}
-
-// comparison is a metric-by-repo table for the overview when comparing.
-func (m Model) comparison(w int) string {
-	metrics := []struct {
-		label string
-		value func(r *repoState) string
-	}{
-		{"Lines of code", func(r *repoState) string { return num(r.local.LOC.Code) }},
-		{"Files", func(r *repoState) string { return num(r.local.LOC.Files) }},
-		{"Commits", func(r *repoState) string { return num(r.hist.Commits) }},
-		{"Contributors", func(r *repoState) string { return num(len(r.hist.Authors)) }},
-		{"Active (90d)", func(r *repoState) string { return num(r.hist.ActiveAuthors90d) }},
-		{"Repo age", func(r *repoState) string {
-			if r.local.History.Commits == 0 {
-				return "—"
-			}
-			return humanSpan(time.Since(r.local.History.First))
-		}},
-		{"Merged PRs", m.prValue},
-		{"Top language", func(r *repoState) string {
-			if len(r.local.LOC.Languages) == 0 {
-				return "—"
-			}
-			top := r.local.LOC.Languages[0]
-			return top.Name + " " + pct(top.Code, r.local.LOC.Code)
-		}},
-	}
-
-	headers := []string{""}
-	for _, r := range m.repos {
-		headers = append(headers, truncate(r.name, 24))
-	}
-	t := table.New().
-		Border(lipgloss.RoundedBorder()).
-		BorderStyle(dimStyle).
-		Headers(headers...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Padding(0, 1)
-			switch {
-			case col == 0:
-				return s.Foreground(subtle)
-			case row == table.HeaderRow:
-				return s.Bold(true).Foreground(m.repos[col-1].color).Align(lipgloss.Right)
-			}
-			return s.Align(lipgloss.Right)
-		})
-	for _, mt := range metrics {
-		row := []string{mt.label}
-		for i := range m.repos {
-			r := &m.repos[i]
-			switch {
-			case r.localErr != nil:
-				row = append(row, "error")
-			case r.local == nil:
-				row = append(row, "…")
-			default:
-				row = append(row, mt.value(r))
-			}
-		}
-		t.Row(row...)
-	}
-	out := t.Render()
-	if lipgloss.Width(out) > w {
-		out = t.Width(w).Render()
-	}
-	if m.opts.NoRemote || m.anyPRFallback() {
-		out += "\n" + dimStyle.Render("~ = estimated from commit messages")
-	}
-	return out
-}
-
-func (m Model) anyPRFallback() bool {
-	for _, r := range m.repos {
-		if r.prDone && r.prs == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func languages(r *repoState, w int, all bool) string {
@@ -188,7 +198,7 @@ func (m Model) authors(w int) string {
 	}
 	headers, _ := m.authorColumns(colW)
 	return m.each(w, func(r *repoState, w int) []string {
-		return authorsRepo(r, w, limit, windowed, all, m.prSort, headers)
+		return authorsRepo(r, w, limit, windowed, all, headers)
 	})
 }
 
@@ -230,7 +240,7 @@ func (m Model) authorColumns(w int) (headers []string, fits bool) {
 	return headers, false
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey, headers []string) []string {
+func authorsRepo(r *repoState, w, limit int, windowed, all bool, headers []string) []string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
@@ -251,12 +261,7 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKe
 	if lipgloss.Width(rendered) > w {
 		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
 	}
-	sections := []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
-	if len(h.PRSizes.ByAuthor) > 0 {
-		sections = append(sections, section("PR size by author (lines changed per PR)")+"\n"+
-			prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort))
-	}
-	return sections
+	return []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
 }
 
 // authorsTable is a repo's contributors table with the given columns (see authorColumns).
@@ -436,8 +441,8 @@ func sortAuthorPRs(authors []stats.AuthorPRs, by prSortKey) {
 
 // activity overlays every repo on the same line charts, one color each.
 func (m Model) activity(w int) string {
-	var lines, commits, prSizes, tests []series
-	var pending, prSummaries, testSummaries []string
+	var lines, commits, tests []series
+	var pending, testSummaries []string
 	for i := range m.repos {
 		r := &m.repos[i]
 		if s := m.status(r, w); s != "" {
@@ -456,14 +461,6 @@ func (m Model) activity(w int) string {
 			cs.vals = append(cs.vals, float64(b.Commits))
 		}
 		lines, commits = append(lines, ls), append(commits, cs)
-
-		ps := series{name: r.name, color: r.color}
-		for _, mo := range h.PRSizes.Monthly {
-			ps.times = append(ps.times, mo.Start)
-			ps.vals = append(ps.vals, mo.AvgLines)
-		}
-		prSizes = append(prSizes, ps)
-		prSummaries = append(prSummaries, m.prSizeSummary(r))
 
 		ts := series{name: r.name, color: r.color}
 		for _, mo := range h.TestsMonthly {
@@ -486,38 +483,12 @@ func (m Model) activity(w int) string {
 	}
 	from, to, _, _ := m.span() // zero unless windowed, letting the charts fit the data
 	out = append(out,
-		section(activityCharts[0])+"\n"+timeChart(lines, w, m.chartH(), shortNum, from, to),
-		section(activityCharts[1])+"\n"+timeChart(commits, w, m.chartH(), nil, from, to),
-		section(activityCharts[2]+" (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w, m.chartH(), from, to),
-		section(activityCharts[3]+" (% of commits)")+"\n"+testChart(tests, testSummaries, w, m.chartH(), from, to),
+		section(activityCharts[0])+"\n"+timeChart(lines, w, m.chartH(), shortNum, chartBounds{from: from, to: to}),
+		section(activityCharts[1])+"\n"+timeChart(commits, w, m.chartH(), nil, chartBounds{from: from, to: to}),
+		section(activityCharts[2]+" (% of commits)")+"\n"+testChart(tests, testSummaries, w, m.chartH(), from, to),
 		section("When commits happen (local time)")+"\n"+m.punchcards(w),
 	)
 	return strings.Join(out, "\n")
-}
-
-func prSizeChart(ss []series, summaries []string, w, h int, from, to time.Time) string {
-	found := false
-	for _, s := range ss {
-		found = found || len(s.times) > 0
-	}
-	if !found {
-		return dimStyle.Render("No merged PRs found in this branch's history.")
-	}
-	return timeChart(ss, w, h, shortNum, from, to) + "\n" + strings.Join(summaries, "\n")
-}
-
-// prSizeSummary is a one-line overall PR size summary for a repo.
-func (m Model) prSizeSummary(r *repoState) string {
-	ps := r.hist.PRSizes
-	text := "no PRs detected"
-	if ps.PRs > 0 {
-		text = fmt.Sprintf("%s PRs · mean %s · median %s lines",
-			num(ps.PRs), num(int(math.Round(ps.MeanLines))), num(ps.MedianLines))
-	}
-	if !m.comparing() {
-		return text
-	}
-	return lipgloss.NewStyle().Foreground(r.color).Render("● "+r.name) + "  " + text
 }
 
 // punchcards lays repos' heatmaps side by side, narrowing cells if that helps them fit.
@@ -557,9 +528,17 @@ func legend(ss []series) string {
 	return strings.Join(parts, "   ")
 }
 
+// chartBounds widens a chart's axes past its own data: the x axis to cover
+// from..to and the y axis to reach peak, where set. Separate charts given the
+// same bounds can be read against each other.
+type chartBounds struct {
+	from, to time.Time
+	peak     float64
+}
+
 // timeChart draws series as braille lines on shared axes. yFmt may be nil for plain integers.
-// The x axis covers from..to (when set) and any data outside it, so every repo shares one span.
-func timeChart(ss []series, w, h int, yFmt func(float64) string, from, to time.Time) string {
+// The axes cover b and all the data, so every repo shares one span.
+func timeChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds) string {
 	var drawable []series
 	for _, s := range ss {
 		if len(s.times) > 1 {
@@ -569,12 +548,12 @@ func timeChart(ss []series, w, h int, yFmt func(float64) string, from, to time.T
 	if len(drawable) == 0 {
 		return dimStyle.Render("Not enough history for a chart yet.")
 	}
-	minT, maxT, peak := drawable[0].times[0], drawable[0].times[0], 1.0
-	if !from.IsZero() && from.Before(minT) {
-		minT = from
+	minT, maxT, peak := drawable[0].times[0], drawable[0].times[0], math.Max(b.peak, 1)
+	if !b.from.IsZero() && b.from.Before(minT) {
+		minT = b.from
 	}
-	if !to.IsZero() && to.After(maxT) {
-		maxT = to
+	if !b.to.IsZero() && b.to.After(maxT) {
+		maxT = b.to
 	}
 	for _, s := range drawable {
 		for i, t := range s.times {
@@ -721,43 +700,104 @@ func fileChart(rows []barRow, w int, filter fileFilter) string {
 	return pathBarChart(rows, w)
 }
 
-func (m Model) pullRequestsRepo(r *repoState, w int) []string {
-	fallback := dimStyle.Width(w).Render(fmt.Sprintf(
-		"From commit messages alone, history references ~%s PRs (merge commits and squash-merge titles like \"(#123)\").",
-		num(r.hist.PRsInHistory)))
+// pullRequests is each repo's PR figures, PR sizes over time and by author,
+// and top PR authors from GitHub.
+func (m Model) pullRequests(w int) string {
+	widths := m.tileWidths(m.prFigures)
+	// Every repo's chart has the same axes, so they can be read side by side.
+	from, to, _, _ := m.span()
+	b := chartBounds{from: from, to: to}
+	for i := range m.repos {
+		r := &m.repos[i]
+		if r.local == nil || r.localErr != nil {
+			continue
+		}
+		for _, mo := range r.hist.PRSizes.Monthly {
+			if b.from.IsZero() || mo.Start.Before(b.from) {
+				b.from = mo.Start
+			}
+			if b.to.IsZero() || mo.Start.After(b.to) {
+				b.to = mo.Start
+			}
+			b.peak = math.Max(b.peak, mo.AvgLines)
+		}
+	}
+	return m.each(w, func(r *repoState, w int) []string { return m.pullRequestsRepo(r, w, widths, b) })
+}
+
+func (m Model) pullRequestsRepo(r *repoState, w int, widths []int, b chartBounds) []string {
+	var status string
 	switch {
 	case m.opts.NoRemote:
-		return []string{dimStyle.Render("Remote lookups disabled (--no-remote).") + "\n\n" + fallback}
+		status = dimStyle.Render("Remote lookups disabled (--no-remote).")
 	case !r.prDone:
-		return []string{m.spin.View() + " Asking GitHub…\n\n" + fallback}
+		status = m.spin.View() + " Asking GitHub…"
 	case r.prErr != nil:
-		msg := lipgloss.NewStyle().Width(w).Render(errStyle.Render("Couldn't load PRs from GitHub: ") + r.prErr.Error())
-		return []string{msg + "\n\n" + fallback}
+		status = lipgloss.NewStyle().Width(w).Render(errStyle.Render("Couldn't load PRs from GitHub: ") + r.prErr.Error())
+	default:
+		status = dimStyle.Render(r.prs.Repo)
+	}
+	top := status + "\n" + flow(figureTiles(m.prFigures(r), widths), w)
+	if m.windowed() && r.prs != nil {
+		top += "\n" + dimStyle.Width(w).Render("Open, merged, closed and time to merge come from GitHub and cover all time; the time window doesn't apply to them.")
 	}
 
-	p := r.prs
-	median := "—"
-	if p.Sample > 0 {
-		median = humanSpan(time.Duration(p.MedianHoursToMerge * float64(time.Hour)))
+	h := r.hist
+	chart := dimStyle.Render("No merged PRs found in this branch's history.")
+	if len(h.PRSizes.Monthly) > 0 {
+		s := series{name: r.name, color: r.color}
+		for _, mo := range h.PRSizes.Monthly {
+			s.times = append(s.times, mo.Start)
+			s.vals = append(s.vals, mo.AvgLines)
+		}
+		chart = timeChart([]series{s}, w, m.chartH(), shortNum, b)
 	}
-	tiles := flow([]string{
-		tile("Open", num(p.Open)),
-		tile("Merged", num(p.Merged)),
-		tile("Closed unmerged", num(p.Closed)),
-		tile("Median time to merge", median),
-	}, w)
+	byAuthor := dimStyle.Render("No merged PRs found in this branch's history.")
+	if len(h.PRSizes.ByAuthor) > 0 {
+		byAuthor = prSizesByAuthor(h.PRSizes, w, 10, m.showAll(), m.prSort)
+	}
+	sections := []string{
+		top,
+		section(prChart+" (lines changed)") + "\n" + chart,
+		section("PR size by author (lines changed per PR)") + "\n" + byAuthor,
+	}
 
-	var rows []barRow
-	for _, a := range p.TopAuthors[:min(len(p.TopAuthors), 10)] {
-		rows = append(rows, barRow{label: a.Login, value: float64(a.Merged), text: num(a.Merged)})
-	}
-	out := dimStyle.Render(p.Repo) + "\n" + tiles
-	if m.windowed() {
-		out += "\n" + dimStyle.Width(w).Render("These come from GitHub and cover all time; the time window doesn't apply to them.")
-	}
-	sections := []string{out}
-	if len(rows) > 0 {
-		sections = append(sections, section(fmt.Sprintf("Top PR authors (last %d merged)", p.Sample))+"\n"+barChart(rows, w))
+	if r.prs != nil && len(r.prs.TopAuthors) > 0 {
+		var rows []barRow
+		for _, a := range r.prs.TopAuthors[:min(len(r.prs.TopAuthors), 10)] {
+			rows = append(rows, barRow{label: a.Login, value: float64(a.Merged), text: num(a.Merged)})
+		}
+		sections = append(sections, section(fmt.Sprintf("Top PR authors (last %d merged)", r.prs.Sample))+"\n"+barChart(rows, w))
 	}
 	return sections
+}
+
+// prFigures are a repo's tiles on Pull Requests: GitHub's counts when any
+// repo can have them, then PR sizes from history.
+func (m Model) prFigures(r *repoState) []figure {
+	var figures []figure
+	if m.anyGitHub() {
+		figures = append(figures,
+			figure{"Open", m.gitHubValue(r, func(p *remote.PRStats) string { return num(p.Open) })},
+			figure{"Merged", m.gitHubValue(r, func(p *remote.PRStats) string { return num(p.Merged) })},
+			figure{"Closed unmerged", m.gitHubValue(r, func(p *remote.PRStats) string { return num(p.Closed) })},
+			figure{"Median time to merge", m.gitHubValue(r, func(p *remote.PRStats) string {
+				if p.Sample == 0 {
+					return "—"
+				}
+				return humanSpan(time.Duration(p.MedianHoursToMerge * float64(time.Hour)))
+			})},
+		)
+	}
+	ps := r.hist.PRSizes
+	mean, median := "—", "—"
+	if ps.PRs > 0 {
+		mean = num(int(math.Round(ps.MeanLines))) + " lines"
+		median = num(ps.MedianLines) + " lines"
+	}
+	return append(figures,
+		figure{"PRs in history", "~" + num(r.hist.PRsInHistory)},
+		figure{"Mean PR size", mean},
+		figure{"Median PR size", median},
+	)
 }

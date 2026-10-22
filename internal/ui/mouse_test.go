@@ -16,7 +16,7 @@ import (
 // Clicks land on what the screen shows there, found by looking at the rendered view.
 func TestMouse(t *testing.T) {
 	var m tea.Model = New(Options{Roots: []string{"/src/one", "/src/two"}, NoRemote: true})
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
 	for i := range 2 {
 		local := sampleLocal()
 		for j := range 30 {
@@ -195,7 +195,7 @@ func TestClickPRSort(t *testing.T) {
 
 	for _, columns := range []bool{false, true} {
 		var m tea.Model = New(Options{Roots: []string{"/src/one", "/src/two"}, NoRemote: true})
-		m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 60})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 120})
 		for i := range 2 {
 			local := sampleLocal()
 			local.History.PRSizes.ByAuthor = []stats.AuthorPRs{
@@ -204,7 +204,7 @@ func TestClickPRSort(t *testing.T) {
 			}
 			m, _ = m.Update(localMsg{idx: i, data: local})
 		}
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 		if columns {
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 			if !m.(Model).columns() {

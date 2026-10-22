@@ -65,7 +65,7 @@ func testChart(ss []series, summaries []string, w, h int, from, to time.Time) st
 	if !found {
 		return dimStyle.Render("No commits changed a test file.")
 	}
-	return timeChart(ss, w, h, percent, from, to) + "\n" + strings.Join(summaries, "\n")
+	return timeChart(ss, w, h, percent, chartBounds{from: from, to: to}) + "\n" + strings.Join(summaries, "\n")
 }
 
 // testSummary is an overall test share for a repo, wrapped to w.

@@ -33,6 +33,7 @@ const (
 	authorsTab  = 1
 	activityTab = 2
 	filesTab    = 3
+	prTab       = 4
 )
 
 // repoState is one repo's data as it arrives.
@@ -198,18 +199,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "pgup":
 			m.scroll = max(m.scroll-m.bodyHeight(), 0)
 		case "+", "=":
-			if m.tab == activityTab {
+			if m.hasCharts() {
 				m.resizeCharts(chartStep) // renders itself
 			}
 		case "-", "_":
-			if m.tab == activityTab {
+			if m.hasCharts() {
 				m.resizeCharts(-chartStep)
 			}
 		case "e":
 			m.expanded ^= 1 << m.tab
 			rerender = true
 		case "s":
-			if m.tab == authorsTab {
+			if m.tab == prTab {
 				m.prSort = (m.prSort + 1) % prSortKeys
 				rerender = true
 			}
@@ -483,10 +484,10 @@ func (m Model) footerLayout() (string, []hotspot) {
 	if m.comparing() {
 		keys = append(keys, hint{"o overlap", "o"}, hint{"c columns", "c"})
 	}
-	if m.tab == activityTab {
+	if m.hasCharts() {
 		keys = append(keys, hint{"+/- chart height", "+-"})
 	}
-	if m.tab == authorsTab {
+	if m.tab == prTab {
 		keys = append(keys, hint{"s sort PRs", "s"})
 	}
 	if m.tab == filesTab {
@@ -567,8 +568,8 @@ func (m Model) body() string {
 		s = m.activity(w)
 	case filesTab:
 		s = m.each(w, m.filesRepo)
-	case 4:
-		s = m.each(w, m.pullRequestsRepo)
+	case prTab:
+		s = m.pullRequests(w)
 	}
 	return lipgloss.NewStyle().PaddingLeft(1).Render(s)
 }

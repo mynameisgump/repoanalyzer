@@ -41,7 +41,7 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
-`+`/`-` make the Activity charts taller or shorter, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
+`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
 (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, and clicking a column title in PR size by author sorts by it; anything clickable lights up under the pointer.
@@ -61,21 +61,24 @@ stats are recomputed from the history already loaded.
 
 ## Tabs
 
-- **Overview** – lines of code, files, commits, contributors, repo age, merged PRs, languages, weekly commit sparkline
-- **Authors** – contributors by commits with share, lines added/removed, first/last commit, and average PR size (lines changed) per author
-- **Activity** – total lines over time, commits per week, average PR size per month, the share of each month's commits
+- **Overview** – tiles for lines of code, files, commits, last commit, lines added/deleted, contributors, repo age,
+  PRs (merged, open, median size, median time to merge) and test share; languages; weekly commit sparkline
+- **Authors** – contributors by commits with share, lines added/removed, first/last commit
+- **Activity** – total lines over time, commits per week, the share of each month's commits
   that changed a test file, and a day × hour heatmap.
   `+`/`-` resize the line charts in 4-row steps (6 rows up to a full screen); taller charts show finer detail, not just bigger lines
 - **Files** – most frequently changed files and the largest files, with test files tagged. `f` cycles all files →
   non-test files → test files only
-- **Pull Requests** – open/merged/closed counts, median time to merge, top PR authors (via `gh`)
+- **Pull Requests** – open/merged/closed counts and median time to merge (via `gh`); PRs found in history with their
+  mean and median size; average PR size per month (resizable like Activity's charts); PR size (lines changed) by
+  author, sorted with `s` or by clicking a column title; top PR authors (via `gh`). Everything but the `gh` figures
+  works offline
 
 ## Comparing repos
 
 Each repo gets its own color. The Activity tab overlays every repo on the same line charts
-(with a legend) and puts the heatmaps side by side; the Overview tab becomes a metric-by-repo
-table. Authors, Files and Pull Requests show one section per repo, stacked; `c` puts them side by side in columns
-instead (also the Overview's language lists). Side by side, the repos' Authors tables always show the same columns.
+(with a legend) and puts the heatmaps side by side. Overview, Authors, Files and Pull Requests show one
+section per repo, stacked; `c` puts them side by side in columns instead, with each section lined up across repos. Side by side, the repos' Authors tables always show the same columns.
 When the terminal is too narrow for that (columns under about 50 characters, or Authors tables that would have to be
 squeezed), they stay stacked and the header says so.
 

@@ -10,9 +10,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
 	"github.com/mynameisgump/repoanalyzer/internal/loc"
+	"github.com/mynameisgump/repoanalyzer/internal/remote"
 	"github.com/mynameisgump/repoanalyzer/internal/report"
 	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
@@ -345,7 +347,7 @@ func TestPRSort(t *testing.T) {
 		}
 	}
 
-	// s cycles the sort on Authors and marks the sorted column; elsewhere it does nothing.
+	// s cycles the sort on Pull Requests and marks the sorted column; elsewhere it does nothing.
 	local := sampleLocal()
 	local.History.PRSizes.ByAuthor = authors
 	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
@@ -356,7 +358,7 @@ func TestPRSort(t *testing.T) {
 	if m.(Model).prSort != sortByMean {
 		t.Errorf("s on Overview changed the sort")
 	}
-	key('2')
+	key('5')
 	for _, want := range []string{"median lines ▼", "PRs ▼", "avg lines ▼"} {
 		key('s')
 		if body := strings.Join(m.(Model).content, "\n"); !strings.Contains(body, want) {
@@ -495,7 +497,9 @@ func TestSideBySideAlignsSections(t *testing.T) {
 
 	var m tea.Model = New(Options{Roots: []string{"/src/small", "/src/big"}, NoRemote: true})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
-	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	small := sampleLocal()
+	small.History.PRSizes.Monthly = nil
+	m, _ = m.Update(localMsg{idx: 0, data: small})
 	m, _ = m.Update(localMsg{idx: 1, data: big})
 	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
 	// aligned checks that title starts a line in both columns.
@@ -513,8 +517,7 @@ func TestSideBySideAlignsSections(t *testing.T) {
 	}
 
 	key('c')
-	key('2')
-	key('e') // show all 33 authors in one repo next to 3 in the other
+	key('5') // one repo's PR size chart is a one-line placeholder, the other's a full chart
 	aligned("PR size by author")
 	key('4')
 	aligned("Largest files")
@@ -538,7 +541,7 @@ func TestStickyHeadings(t *testing.T) {
 		return strings.Split(mm.View(), "\n")[lipgloss.Height(mm.header())]
 	}
 
-	key('2')
+	key('5')
 	if hs := m.(Model).headings; len(hs) != 2 {
 		t.Fatalf("headings = %v, want one per repo", hs)
 	}
@@ -605,5 +608,83 @@ func TestAuthorsColumnsMatch(t *testing.T) {
 		} else if !strings.Contains(mm.header(), "too narrow") {
 			t.Errorf("width %d: stacked without saying why", width)
 		}
+	}
+}
+
+// Side by side, each repo's overview tiles line up with the other's, even
+// when a label or value is wider in one repo than the other.
+func TestOverviewTilesLineUp(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/app", "/src/api"}})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
+	for i := range 2 {
+		m, _ = m.Update(localMsg{idx: i, data: sampleLocal()})
+	}
+	m, _ = m.Update(prMsg{idx: 0, data: &remote.PRStats{Open: 7, Merged: 312, MedianHoursToMerge: 30, Sample: 100}})
+	m, _ = m.Update(prMsg{idx: 1, err: errors.New("no gh")}) // "PRs (from history)" is wider than "Merged PRs"
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if !m.(Model).columns() {
+		t.Fatal("repos didn't go side by side")
+	}
+	colW := m.(Model).columnWidth()
+	corners := func(s string) []int {
+		var at []int
+		for i, r := range []rune(s) {
+			if r == '╭' {
+				at = append(at, i)
+			}
+		}
+		return at
+	}
+	rows := 0
+	for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+		runes := []rune(line)
+		if !strings.Contains(line, "╭") || len(runes) < 1+colW+columnGap {
+			continue
+		}
+		rows++
+		left, right := string(runes[1:1+colW]), string(runes[1+colW+columnGap:])
+		if l, r := corners(left), corners(right); !slices.Equal(l, r) {
+			t.Errorf("tile rows don't line up:\n%s\n%s", left, right)
+		}
+	}
+	if rows < 2 {
+		t.Errorf("expected tiles wrapping onto several rows, found %d", rows)
+	}
+}
+
+// Pull Requests holds everything about PRs, works without GitHub, and its chart resizes.
+func TestPullRequestsTab(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	body := func() string { return ansi.Strip(strings.Join(m.(Model).content, "\n")) }
+	footer := func() string { return ansi.Strip(m.(Model).footer()) }
+
+	key('5')
+	for _, want := range []string{"PRs in history", "Mean PR size", "Median PR size", prChart + " (lines changed)", "PR size by author"} {
+		if !strings.Contains(body(), want) {
+			t.Errorf("Pull Requests is missing %q", want)
+		}
+	}
+	if strings.Contains(body(), "Median time to merge") {
+		t.Errorf("GitHub-only tiles show with --no-remote")
+	}
+	if f := footer(); !strings.Contains(f, "s sort PRs") || !strings.Contains(f, "+/- chart height") {
+		t.Errorf("footer on Pull Requests: %s", f)
+	}
+	before := strings.Count(body(), "\n")
+	key('+')
+	if got := strings.Count(body(), "\n") - before; got != chartStep {
+		t.Errorf("+ grew Pull Requests by %d lines, want %d", got, chartStep)
+	}
+
+	key('2')
+	if strings.Contains(body(), "PR size by author") || strings.Contains(footer(), "s sort PRs") {
+		t.Errorf("PR size by author is still on Authors")
+	}
+	key('3')
+	if strings.Contains(body(), prChart) {
+		t.Errorf("the PR size chart is still on Activity")
 	}
 }
