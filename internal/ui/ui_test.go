@@ -566,3 +566,44 @@ func TestStickyHeadings(t *testing.T) {
 		t.Errorf("single repo headings = %v", hs)
 	}
 }
+
+// Side by side, every repo's Authors table has the same columns, and repos stack
+// rather than squeeze a table that can't fit.
+func TestAuthorsColumnsMatch(t *testing.T) {
+	wide := sampleLocal() // big numbers make this repo's table much wider
+	for i := range wide.History.Authors {
+		wide.History.Authors[i].Added *= 100000
+		wide.History.Authors[i].Deleted *= 100000
+	}
+	for width := 100; width <= 220; width += 2 {
+		var m tea.Model = New(Options{Roots: []string{"/src/small", "/src/wide"}, NoRemote: true})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+		m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+		m, _ = m.Update(localMsg{idx: 1, data: wide})
+		for _, k := range "c2" {
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{k}})
+		}
+		mm := m.(Model)
+		var headerRows []string
+		for _, line := range mm.content {
+			if strings.Contains(line, "│ # ") {
+				headerRows = append(headerRows, line)
+			}
+		}
+		if mm.columns() {
+			if len(headerRows) != 1 {
+				t.Fatalf("width %d: %d table header rows side by side", width, len(headerRows))
+			}
+			for _, col := range []string{"Commits", "Share", "Added", "Deleted", "First", "Last"} {
+				if n := strings.Count(headerRows[0], col); n == 1 {
+					t.Errorf("width %d: only one table has %s: %q", width, col, headerRows[0])
+				}
+			}
+			if strings.Count(headerRows[0], "Author") != 2 {
+				t.Errorf("width %d: a table was squeezed: %q", width, headerRows[0])
+			}
+		} else if !strings.Contains(mm.header(), "too narrow") {
+			t.Errorf("width %d: stacked without saying why", width)
+		}
+	}
+}

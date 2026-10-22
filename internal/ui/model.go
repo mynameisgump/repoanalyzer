@@ -80,6 +80,8 @@ type Model struct {
 	// headings are the lines of content holding repo headings, which stay
 	// pinned at the top while their repo's sections scroll past.
 	headings []int
+	// columnsOn is whether repos are side by side right now; see fitColumns.
+	columnsOn bool
 }
 
 func New(opts Options) Model {
@@ -239,6 +241,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // render redraws the active tab into content and keeps scroll in range.
 func (m *Model) render() {
+	m.columnsOn = m.fitColumns()
 	m.content = strings.Split(m.body(), "\n")
 	m.headings = m.headingLines()
 	m.scroll = min(m.scroll, m.maxScroll())
@@ -520,7 +523,21 @@ func (m Model) columnWidth() int {
 
 // columns reports whether repos are shown side by side right now.
 func (m Model) columns() bool {
-	return m.sideBySide && m.comparing() && m.columnWidth() >= minColumnW
+	return m.columnsOn
+}
+
+// fitColumns decides whether repos go side by side: c has to have turned it on,
+// and the columns have to be wide enough that the current tab doesn't need
+// squeezing. Otherwise they stack.
+func (m Model) fitColumns() bool {
+	if !m.sideBySide || !m.comparing() || m.columnWidth() < minColumnW {
+		return false
+	}
+	if m.tab == authorsTab {
+		_, fits := m.authorColumns(m.columnWidth())
+		return fits
+	}
+	return true
 }
 
 // columnsLabel shows the side-by-side setting in the header while it's on.

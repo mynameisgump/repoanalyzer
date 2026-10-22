@@ -70,8 +70,9 @@ stats are recomputed from the history already loaded.
 Each repo gets its own color. The Activity tab overlays every repo on the same line charts
 (with a legend) and puts the heatmaps side by side; the Overview tab becomes a metric-by-repo
 table. Authors, Files and Pull Requests show one section per repo, stacked; `c` puts them side by side in columns
-instead (also the Overview's language lists). Columns need about 50 characters each, so on a narrower terminal
-they stay stacked and the header says so.
+instead (also the Overview's language lists). Side by side, the repos' Authors tables always show the same columns.
+When the terminal is too narrow for that (columns under about 50 characters, or Authors tables that would have to be
+squeezed), they stay stacked and the header says so.
 
 ## How it works
 

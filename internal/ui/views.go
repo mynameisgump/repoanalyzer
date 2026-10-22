@@ -180,15 +180,56 @@ func weeklySparkline(weeks []stats.Bucket, w int, color lipgloss.TerminalColor) 
 }
 
 func (m Model) authors(w int) string {
-	limit := 50
-	if m.comparing() {
-		limit = 15 // keep both repos within a reasonable scroll
+	limit, windowed, all := m.authorsLimit(), m.windowed(), m.showAll()
+	colW := w
+	if m.columns() {
+		colW = m.columnWidth()
 	}
-	windowed, all := m.windowed(), m.showAll()
-	return m.each(w, func(r *repoState, w int) []string { return authorsRepo(r, w, limit, windowed, all, m.prSort) })
+	headers, _ := m.authorColumns(colW)
+	return m.each(w, func(r *repoState, w int) []string {
+		return authorsRepo(r, w, limit, windowed, all, m.prSort, headers)
+	})
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey) []string {
+// authorsLimit is how many authors the table shows before e expands it.
+func (m Model) authorsLimit() int {
+	if m.comparing() {
+		return 15 // keep both repos within a reasonable scroll
+	}
+	return 50
+}
+
+// authorColumns picks the Authors table's columns for tables w wide. Every repo
+// gets the same ones: Share, then Last, are dropped until the widest repo's table
+// fits. fits is false when even the fewest columns are too wide, and the
+// tables will be squeezed, wrapping names and numbers.
+func (m Model) authorColumns(w int) (headers []string, fits bool) {
+	headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "Last"}
+	if w >= 110 { // room for the share bar and the first commit's date
+		headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "First", "Last"}
+	}
+	limit, all := m.authorsLimit(), m.showAll()
+	fit := func(headers []string) bool {
+		for i := range m.repos {
+			r := &m.repos[i]
+			if r.local != nil && len(r.hist.Authors) > 0 && lipgloss.Width(authorsTable(r, w, limit, all, headers).Render()) > w {
+				return false
+			}
+		}
+		return true
+	}
+	for _, drop := range []string{"", "Share", "Last"} {
+		if drop != "" {
+			headers = slices.DeleteFunc(slices.Clone(headers), func(h string) bool { return h == drop })
+		}
+		if fit(headers) {
+			return headers, true
+		}
+	}
+	return headers, false
+}
+
+func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey, headers []string) []string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
@@ -203,15 +244,27 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKe
 	summary := fmt.Sprintf("%s contributors · %s active in %s",
 		boldStyle.Render(num(len(h.Authors))), boldStyle.Render(num(h.ActiveAuthors90d)), recent)
 
-	n, more := listCut(len(h.Authors), limit, all)
-	authors := h.Authors[:n]
-	// On narrow terminals drop the share bar and first-commit date so the table fits.
-	wide := w >= 110
-	nameW := min(28, max(w/4, 12))
-	headers := []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "Last"}
-	if wide {
-		headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "First", "Last"}
+	_, more := listCut(len(h.Authors), limit, all)
+	t := authorsTable(r, w, limit, all, headers)
+	rendered := t.Render()
+	if lipgloss.Width(rendered) > w {
+		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
 	}
+	sections := []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
+	if len(h.PRSizes.ByAuthor) > 0 {
+		sections = append(sections, section("PR size by author (lines changed per PR)")+"\n"+
+			prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort))
+	}
+	return sections
+}
+
+// authorsTable is a repo's contributors table with the given columns (see authorColumns).
+func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table.Table {
+	h := r.hist
+	n, _ := listCut(len(h.Authors), limit, all)
+	authors := h.Authors[:n]
+	wide := slices.Contains(headers, "First")
+	nameW := min(28, max(w/4, 12))
 	topCommits := float64(authors[0].Commits)
 	cell := func(i int, a stats.Author, col string) string {
 		switch col {
@@ -235,59 +288,37 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKe
 		}
 		return ago(a.Last)
 	}
-	build := func(headers []string) *table.Table {
-		t := table.New().
-			Border(lipgloss.RoundedBorder()).
-			BorderStyle(dimStyle).
-			Headers(headers...).
-			StyleFunc(func(row, col int) lipgloss.Style {
-				s := lipgloss.NewStyle().Padding(0, 1)
-				if row == table.HeaderRow {
-					return s.Bold(true).Foreground(r.color)
-				}
-				switch headers[col] {
-				case "#":
-					s = s.Align(lipgloss.Right).Foreground(subtle)
-				case "Commits":
-					s = s.Align(lipgloss.Right)
-				case "Added":
-					s = s.Align(lipgloss.Right).Foreground(green)
-				case "Deleted":
-					s = s.Align(lipgloss.Right).Foreground(red)
-				case "First", "Last":
-					s = s.Foreground(subtle)
-				}
-				return s
-			})
-		for i, a := range authors {
-			var row []string
-			for _, col := range headers {
-				row = append(row, cell(i, a, col))
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(dimStyle).
+		Headers(headers...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				return s.Bold(true).Foreground(r.color)
 			}
-			t.Row(row...)
+			switch headers[col] {
+			case "#":
+				s = s.Align(lipgloss.Right).Foreground(subtle)
+			case "Commits":
+				s = s.Align(lipgloss.Right)
+			case "Added":
+				s = s.Align(lipgloss.Right).Foreground(green)
+			case "Deleted":
+				s = s.Align(lipgloss.Right).Foreground(red)
+			case "First", "Last":
+				s = s.Foreground(subtle)
+			}
+			return s
+		})
+	for i, a := range authors {
+		var row []string
+		for _, col := range headers {
+			row = append(row, cell(i, a, col))
 		}
-		return t
+		t.Row(row...)
 	}
-	t := build(headers)
-	rendered := t.Render()
-	// Still too wide (e.g. side by side): drop columns before squeezing, which wraps names and numbers.
-	for _, drop := range []string{"Share", "Last"} {
-		if lipgloss.Width(rendered) <= w {
-			break
-		}
-		headers = slices.DeleteFunc(headers, func(h string) bool { return h == drop })
-		t = build(headers)
-		rendered = t.Render()
-	}
-	if lipgloss.Width(rendered) > w {
-		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
-	}
-	sections := []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
-	if len(h.PRSizes.ByAuthor) > 0 {
-		sections = append(sections, section("PR size by author (lines changed per PR)")+"\n"+
-			prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort))
-	}
-	return sections
+	return t
 }
 
 // prSortKey picks the column PR size by author is ordered by, largest first.
