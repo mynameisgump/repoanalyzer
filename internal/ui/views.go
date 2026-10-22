@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 
-	"github.com/ethancrann/repoanalyzer/internal/loc"
-	"github.com/ethancrann/repoanalyzer/internal/stats"
+	"github.com/mynameisgump/repoanalyzer/internal/loc"
+	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
 func section(title string) string {

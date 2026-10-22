@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitlog"
+	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
 )
 
 func TestCompute(t *testing.T) {

@@ -11,10 +11,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitx"
-	"github.com/ethancrann/repoanalyzer/internal/remote"
-	"github.com/ethancrann/repoanalyzer/internal/report"
-	"github.com/ethancrann/repoanalyzer/internal/ui"
+	"github.com/mynameisgump/repoanalyzer/internal/gitx"
+	"github.com/mynameisgump/repoanalyzer/internal/remote"
+	"github.com/mynameisgump/repoanalyzer/internal/report"
+	"github.com/mynameisgump/repoanalyzer/internal/ui"
 )
 
 func main() {

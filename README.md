@@ -4,7 +4,15 @@ Terminal dashboard of stats and charts for the git repo you run it in.
 
 ## Install
 
-Needs Go 1.24+ (`brew install go`). From a clone of this repo:
+Needs Go 1.24+ (`brew install go`). Without cloning:
+
+```sh
+go install github.com/mynameisgump/repoanalyzer/cmd/repoanalyzer@latest
+```
+
+That puts it in `$(go env GOPATH)/bin` (usually `~/go/bin`), which needs to be on your `PATH`.
+
+Or from a clone of this repo:
 
 ```sh
 ./install.sh                         # builds and installs to ~/.local/bin

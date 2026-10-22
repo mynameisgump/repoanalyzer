@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitlog"
-	"github.com/ethancrann/repoanalyzer/internal/gitx"
-	"github.com/ethancrann/repoanalyzer/internal/loc"
-	"github.com/ethancrann/repoanalyzer/internal/stats"
+	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
+	"github.com/mynameisgump/repoanalyzer/internal/gitx"
+	"github.com/mynameisgump/repoanalyzer/internal/loc"
+	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
 // Local is everything computed from the repo on disk (no network).

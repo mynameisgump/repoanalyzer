@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitx"
+	"github.com/mynameisgump/repoanalyzer/internal/gitx"
 )
 
 // FileChange is one line of --numstat output.

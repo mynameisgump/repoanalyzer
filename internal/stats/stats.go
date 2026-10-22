@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitlog"
+	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
 )
 
 type Author struct {

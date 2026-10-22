@@ -3,7 +3,7 @@ package ui
 import (
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/stats"
+	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
 // windowMode limits history stats to a span of time; t cycles through them, o toggles overlap.

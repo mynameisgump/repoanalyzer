@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitx"
+	"github.com/mynameisgump/repoanalyzer/internal/gitx"
 )
 
 // Files larger than this are assumed to be data or generated and are skipped.

@@ -1,4 +1,4 @@
-module github.com/ethancrann/repoanalyzer
+module github.com/mynameisgump/repoanalyzer
 
 go 1.24.2
 

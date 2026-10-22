@@ -11,10 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitlog"
-	"github.com/ethancrann/repoanalyzer/internal/loc"
-	"github.com/ethancrann/repoanalyzer/internal/report"
-	"github.com/ethancrann/repoanalyzer/internal/stats"
+	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
+	"github.com/mynameisgump/repoanalyzer/internal/loc"
+	"github.com/mynameisgump/repoanalyzer/internal/report"
+	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
 func sampleLocal() *report.Local {

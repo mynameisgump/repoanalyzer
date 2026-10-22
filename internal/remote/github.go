@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethancrann/repoanalyzer/internal/gitx"
+	"github.com/mynameisgump/repoanalyzer/internal/gitx"
 )
 
 type PRAuthor struct {

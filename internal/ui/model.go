@@ -10,9 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ethancrann/repoanalyzer/internal/remote"
-	"github.com/ethancrann/repoanalyzer/internal/report"
-	"github.com/ethancrann/repoanalyzer/internal/stats"
+	"github.com/mynameisgump/repoanalyzer/internal/remote"
+	"github.com/mynameisgump/repoanalyzer/internal/report"
+	"github.com/mynameisgump/repoanalyzer/internal/stats"
 )
 
 // MaxRepos is how many repos can be compared at once (one color each).
