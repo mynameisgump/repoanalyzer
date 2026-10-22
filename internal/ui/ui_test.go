@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -309,5 +310,47 @@ func TestExpandLists(t *testing.T) {
 	key('e')
 	if strings.Contains(body(), "Author 59") || !strings.Contains(body(), "+ 10 more") {
 		t.Errorf("a second e should collapse the authors again")
+	}
+}
+
+func TestPRSort(t *testing.T) {
+	authors := []stats.AuthorPRs{
+		{Name: "Avg", PRs: 2, MeanLines: 900, MedianLines: 10},
+		{Name: "Median", PRs: 5, MeanLines: 300, MedianLines: 280},
+		{Name: "Busy", PRs: 40, MeanLines: 100, MedianLines: 60},
+	}
+	for by, want := range map[prSortKey]string{
+		sortByMean:   "Avg Median Busy",
+		sortByMedian: "Median Busy Avg",
+		sortByPRs:    "Busy Median Avg",
+	} {
+		got := slices.Clone(authors)
+		sortAuthorPRs(got, by)
+		var names []string
+		for _, a := range got {
+			names = append(names, a.Name)
+		}
+		if strings.Join(names, " ") != want {
+			t.Errorf("sort %d = %v, want %s", by, names, want)
+		}
+	}
+
+	// s cycles the sort on Authors and marks the sorted column; elsewhere it does nothing.
+	local := sampleLocal()
+	local.History.PRSizes.ByAuthor = authors
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m, _ = m.Update(localMsg{idx: 0, data: local})
+	key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	key('s')
+	if m.(Model).prSort != sortByMean {
+		t.Errorf("s on Overview changed the sort")
+	}
+	key('2')
+	for _, want := range []string{"median lines ▼", "PRs ▼", "avg lines ▼"} {
+		key('s')
+		if body := strings.Join(m.(Model).content, "\n"); !strings.Contains(body, want) {
+			t.Errorf("after s, header doesn't show %q", want)
+		}
 	}
 }

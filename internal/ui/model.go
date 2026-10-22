@@ -26,7 +26,10 @@ type Options struct {
 
 var tabNames = []string{"Overview", "Authors", "Activity", "Files", "Pull Requests"}
 
-const activityTab = 2
+const (
+	authorsTab  = 1
+	activityTab = 2
+)
 
 // repoState is one repo's data as it arrives.
 type repoState struct {
@@ -65,6 +68,7 @@ type Model struct {
 	beforeOverlap windowMode // what o returns to
 	chartHeight   int        // Activity line chart rows; 0 means defaultChartH
 	expanded      uint8      // bit per tab: e shows every row of that tab's lists
+	prSort        prSortKey  // which column orders PR size by author; s cycles it
 	// content is the rendered body, split into lines. Rendering a tab can take
 	// milliseconds (Activity draws several charts), so it's redone only when
 	// something shown changes; scrolling just moves a window over these lines.
@@ -187,6 +191,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			m.expanded ^= 1 << m.tab
 			rerender = true
+		case "s":
+			if m.tab == authorsTab {
+				m.prSort = (m.prSort + 1) % prSortKeys
+				rerender = true
+			}
 		case "t":
 			m.window = m.window.next(m.comparing())
 			m.applyWindow()
@@ -304,6 +313,9 @@ func (m Model) footer() string {
 	}
 	if m.tab == activityTab {
 		keys = append(keys, "+/- chart height")
+	}
+	if m.tab == authorsTab {
+		keys = append(keys, "s sort PRs")
 	}
 	keys = append(keys, "q quit")
 	prefix := " "

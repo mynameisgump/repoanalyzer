@@ -185,10 +185,10 @@ func (m Model) authors(w int) string {
 		limit = 15 // keep both repos within a reasonable scroll
 	}
 	windowed, all := m.windowed(), m.showAll()
-	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed, all) })
+	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed, all, m.prSort) })
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed, all bool) string {
+func authorsRepo(r *repoState, w, limit int, windowed, all bool, prSort prSortKey) string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
@@ -252,69 +252,121 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool) string {
 	}
 	out := withNote(summary+"\n"+rendered, more)
 	if len(h.PRSizes.ByAuthor) > 0 {
-		out += "\n" + section("PR size by author (lines changed per PR)") + "\n" + prSizesByAuthor(h.PRSizes, w, min(limit, 10), all)
+		out += "\n" + section("PR size by author (lines changed per PR)") + "\n" + prSizesByAuthor(h.PRSizes, w, min(limit, 10), all, prSort)
 	}
 	return out
 }
 
-// prSizesByAuthor charts each author's average PR size, largest average first.
-func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool) string {
-	// Largest average first; ByAuthor itself stays most-PRs-first for --json.
+// prSortKey picks the column PR size by author is ordered by, largest first.
+type prSortKey int
+
+const (
+	sortByMean prSortKey = iota
+	sortByMedian
+	sortByPRs
+	prSortKeys // number of keys
+)
+
+// prSizesByAuthor charts each author's average PR size, median PR size and PR
+// count as three bar columns, each scaled on its own, ordered by sortBy.
+func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool, sortBy prSortKey) string {
+	// Sort a copy: ByAuthor itself stays most-PRs-first for --json.
 	authors := slices.Clone(ps.ByAuthor)
-	sort.SliceStable(authors, func(i, j int) bool {
-		if authors[i].MeanLines != authors[j].MeanLines {
-			return authors[i].MeanLines > authors[j].MeanLines
-		}
-		return authors[i].PRs > authors[j].PRs
-	})
+	sortAuthorPRs(authors, sortBy)
 	n, more := listCut(len(authors), limit, all)
 	authors = authors[:n]
+
+	type column struct {
+		title string
+		color lipgloss.TerminalColor
+		value func(stats.AuthorPRs) float64
+		valW  int
+		peak  float64
+	}
+	cols := []*column{
+		{title: "avg lines", color: palette[0], value: func(a stats.AuthorPRs) float64 { return math.Round(a.MeanLines) }},
+		{title: "median lines", color: palette[1], value: func(a stats.AuthorPRs) float64 { return float64(a.MedianLines) }},
+		{title: "PRs", color: palette[3], value: func(a stats.AuthorPRs) float64 { return float64(a.PRs) }},
+	}
 	labelW := 0
 	for _, a := range authors {
 		labelW = max(labelW, min(lipgloss.Width(a.Name), 24))
-	}
-	// Pad each figure to its column so rows line up.
-	var avgW, medW, prsW int
-	for _, a := range authors {
-		avgW = max(avgW, len(num(int(math.Round(a.MeanLines)))))
-		medW = max(medW, len(num(a.MedianLines)))
-		prsW = max(prsW, len(num(a.PRs)))
-	}
-	texts := func(withMedian bool) ([]string, int) {
-		var out []string
-		textW := 0
-		for _, a := range authors {
-			avg := int(math.Round(a.MeanLines))
-			// "line " keeps the singular as wide as "lines" so the columns after it stay aligned.
-			text := fmt.Sprintf("avg %*s line%s", avgW, num(avg), plural(avg, "s", " "))
-			if withMedian {
-				text += fmt.Sprintf(" · median %*s", medW, num(a.MedianLines))
-			}
-			text += fmt.Sprintf(" · %*s PR%s", prsW, num(a.PRs), plural(a.PRs, "s", ""))
-			out = append(out, text)
-			textW = max(textW, len(text))
+		for _, c := range cols {
+			c.valW = max(c.valW, len(num(int(c.value(a)))))
+			c.peak = math.Max(c.peak, c.value(a))
 		}
-		return out, textW
 	}
-	// Drop the median if keeping it would squeeze the bars too much.
-	text, textW := texts(true)
-	if w-labelW-textW-4 < 10 {
-		text, _ = texts(false)
+	// Each column is a bar, a space and its right-aligned value; columns are 3 apart.
+	const gap = 3
+	fixed := labelW + 2
+	for _, c := range cols {
+		fixed += 1 + c.valW
 	}
-	var rows []barRow
-	for i, a := range authors {
-		rows = append(rows, barRow{label: a.Name, value: a.MeanLines, text: text[i]})
+	fixed += gap * (len(cols) - 1)
+	barW := (w - fixed) / len(cols)
+	if barW < 3 {
+		barW = 0 // too narrow for bars; the numbers alone still line up
 	}
-	return withNote(barChart(rows, w), more) + "\n" + dimStyle.Width(w).Render("Lines added + deleted per PR merged into this branch (excl. lockfiles). "+
-		"Merge commits count for the PR branch's author, not whoever merged. A few huge PRs pull the average up; the median is the typical PR.")
+
+	var b strings.Builder
+	b.WriteString(strings.Repeat(" ", labelW+2))
+	for i, c := range cols {
+		colW := barW + 1 + c.valW
+		style := lipgloss.NewStyle().Foreground(c.color)
+		text := truncate(c.title, colW)
+		if prSortKey(i) == sortBy { // shorten the title, never the marker
+			style = style.Bold(true)
+			text = truncate(c.title, max(colW-2, 1)) + " ▼"
+		}
+		title := style.Render(text)
+		if barW == 0 {
+			title = style.Width(colW).Align(lipgloss.Right).Render(text)
+		}
+		if i < len(cols)-1 {
+			title = lipgloss.NewStyle().Width(colW + gap).Render(title)
+		}
+		b.WriteString(title)
+	}
+	for _, a := range authors {
+		b.WriteString("\n" + lipgloss.NewStyle().Width(labelW+2).Render(truncate(a.Name, labelW)))
+		for i, c := range cols {
+			v := c.value(a)
+			if barW > 0 {
+				b.WriteString(lipgloss.NewStyle().Foreground(c.color).Width(barW).Render(hbar(v, c.peak, barW)) + " ")
+			}
+			b.WriteString(fmt.Sprintf("%*s", c.valW, num(int(v))))
+			if i < len(cols)-1 {
+				b.WriteString(strings.Repeat(" ", gap))
+			}
+		}
+	}
+	return withNote(b.String(), more) + "\n" + dimStyle.Width(w).Render("Sorted by "+cols[sortBy].title+
+		", largest first (s to change). Lines added + deleted per PR merged into this branch (excl. lockfiles); each column "+
+		"has its own scale. Merge commits count for the PR branch's author, not whoever merged. A few huge PRs pull the "+
+		"average up; the median is the typical PR.")
 }
 
-// plural returns many unless n is 1, in which case it returns one.
-func plural(n int, many, one string) string {
-	if n == 1 {
-		return one
+// sortAuthorPRs orders authors by the chosen column, largest first. Ties go to
+// the average, then the PR count, then the name, so the order is stable.
+func sortAuthorPRs(authors []stats.AuthorPRs, by prSortKey) {
+	keys := func(a stats.AuthorPRs) []float64 {
+		switch by {
+		case sortByMedian:
+			return []float64{float64(a.MedianLines), a.MeanLines, float64(a.PRs)}
+		case sortByPRs:
+			return []float64{float64(a.PRs), a.MeanLines}
+		}
+		return []float64{a.MeanLines, float64(a.PRs)}
 	}
-	return many
+	sort.SliceStable(authors, func(i, j int) bool {
+		ki, kj := keys(authors[i]), keys(authors[j])
+		for n := range ki {
+			if ki[n] != kj[n] {
+				return ki[n] > kj[n]
+			}
+		}
+		return authors[i].Name < authors[j].Name
+	})
 }
 
 // activity overlays every repo on the same line charts, one color each.
