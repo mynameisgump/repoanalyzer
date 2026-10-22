@@ -527,12 +527,11 @@ func punchcard(grid [7][24]int, cellW int) string {
 
 func (m Model) filesRepo(r *repoState, w int) string {
 	h, l := r.hist, r.local.LOC
-	pathW := max(w-40, 20)
 
 	var hot []barRow
 	for _, f := range h.HotFiles[:min(len(h.HotFiles), 15)] {
 		hot = append(hot, barRow{
-			label: truncateLeft(f.Path, pathW),
+			label: f.Path,
 			value: float64(f.Commits),
 			text:  fmt.Sprintf("%5s commits  %s %s", num(f.Commits), addStyle.Render("+"+num(f.Added)), delStyle.Render("-"+num(f.Deleted))),
 		})
@@ -540,13 +539,13 @@ func (m Model) filesRepo(r *repoState, w int) string {
 	var big []barRow
 	for _, f := range l.Largest {
 		big = append(big, barRow{
-			label: truncateLeft(f.Path, pathW),
+			label: f.Path,
 			value: float64(f.Lines),
 			text:  fmt.Sprintf("%7s lines", num(f.Lines)),
 		})
 	}
-	out := section("Most frequently changed (still in tree)") + "\n" + barChart(hot, w) + "\n" +
-		section("Largest files"+m.treeNote()) + "\n" + barChart(big, w) + "\n" +
+	out := section("Most frequently changed (still in tree)") + "\n" + pathBarChart(hot, w) + "\n" +
+		section("Largest files"+m.treeNote()) + "\n" + pathBarChart(big, w) + "\n" +
 		section("Tests vs non-test code"+m.treeNote()) + "\n" + testSplit(l, w)
 	if l.Skipped > 0 {
 		out += "\n\n" + dimStyle.Render(fmt.Sprintf("%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped)))

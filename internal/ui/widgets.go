@@ -31,6 +31,24 @@ type barRow struct {
 
 // barChart renders labeled horizontal bars sized to fit width.
 func barChart(rows []barRow, width int) string {
+	return bars(rows, width, 24, truncate)
+}
+
+// pathBarChart is a barChart whose labels are file paths. Paths get up to 40% of
+// the width (60 columns at most) so the bars stay readable as the terminal narrows,
+// and long ones lose their middle so the file name stays visible.
+func pathBarChart(rows []barRow, width int) string {
+	textW := 0
+	for _, r := range rows {
+		textW = max(textW, lipgloss.Width(r.text))
+	}
+	const minBar, maxLabel = 12, 60
+	label := min(width*2/5, maxLabel, width-textW-4-minBar)
+	return bars(rows, width, max(label, 20), truncatePath)
+}
+
+// bars draws rows with labels at most maxLabel wide, shortened by cut.
+func bars(rows []barRow, width, maxLabel int, cut func(string, int) string) string {
 	if len(rows) == 0 {
 		return dimStyle.Render("No data.")
 	}
@@ -40,13 +58,13 @@ func barChart(rows []barRow, width int) string {
 		textW = max(textW, lipgloss.Width(r.text))
 		peak = math.Max(peak, r.value)
 	}
-	labelW = min(labelW, 24)
+	labelW = min(labelW, maxLabel)
 	barW := max(width-labelW-textW-4, 4)
 
 	var b strings.Builder
 	for i, r := range rows {
 		color := palette[i%len(palette)]
-		label := truncate(r.label, labelW)
+		label := cut(r.label, labelW)
 		fmt.Fprintf(&b, "%s  %s %s\n",
 			lipgloss.NewStyle().Width(labelW).Render(label),
 			lipgloss.NewStyle().Foreground(color).Width(barW).Render(hbar(r.value, peak, barW)),
@@ -88,6 +106,46 @@ func truncate(s string, w int) string {
 		r = r[:len(r)-1]
 	}
 	return string(r) + "…"
+}
+
+// truncatePath shortens a slash-separated path to w columns by dropping folders
+// from the middle. It keeps the file name, then folders from both ends, taking
+// one from the front then one from the back: "packages/api/…/users/handler.go".
+func truncatePath(p string, w int) string {
+	if lipgloss.Width(p) <= w {
+		return p
+	}
+	segs := strings.Split(p, "/")
+	base := segs[len(segs)-1]
+	dirs := segs[:len(segs)-1]
+	// "…/" plus the name is the least we can show; failing that, keep the name's end.
+	if len(dirs) == 0 || lipgloss.Width(base)+2 > w {
+		return truncateLeft(p, w)
+	}
+	used := lipgloss.Width(base) + 2
+	front, back := 0, 0 // folders kept from each end
+	for front+back < len(dirs) {
+		grew := false
+		if seg := dirs[front]; used+lipgloss.Width(seg)+1 <= w {
+			used += lipgloss.Width(seg) + 1
+			front++
+			grew = true
+		}
+		if front+back < len(dirs) {
+			if seg := dirs[len(dirs)-1-back]; used+lipgloss.Width(seg)+1 <= w {
+				used += lipgloss.Width(seg) + 1
+				back++
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	parts := append([]string{}, dirs[:front]...)
+	parts = append(parts, "…")
+	parts = append(parts, dirs[len(dirs)-back:]...)
+	return strings.Join(append(parts, base), "/")
 }
 
 // truncateLeft keeps the end of long paths, which is usually the informative part.

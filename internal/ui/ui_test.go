@@ -167,3 +167,26 @@ func TestTimeWindow(t *testing.T) {
 		t.Errorf("overlap before load: windowed=%v label=%q", wm.windowed(), wm.windowLabel())
 	}
 }
+
+func TestTruncatePath(t *testing.T) {
+	p := "packages/api/controllers/users/userController.ts"
+	for w, want := range map[int]string{
+		60: p,
+		44: "packages/api/…/users/userController.ts",
+		38: "packages/api/…/users/userController.ts",
+		32: "packages/api/…/userController.ts",
+		28: "packages/…/userController.ts",
+		22: "…/userController.ts",
+		12: "…ntroller.ts",
+	} {
+		if got := truncatePath(p, w); got != want {
+			t.Errorf("truncatePath(%d) = %q, want %q", w, got, want)
+		}
+		if got := truncatePath(p, w); lipgloss.Width(got) > w {
+			t.Errorf("truncatePath(%d) = %q is too wide", w, got)
+		}
+	}
+	if got := truncatePath("a-very-long-file-name.go", 10); got != "…e-name.go" {
+		t.Errorf("no folders: %q", got)
+	}
+}
