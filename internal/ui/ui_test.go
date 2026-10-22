@@ -35,7 +35,7 @@ func sampleLocal() *report.Local {
 		LOC: loc.Result{Files: 3, Code: 100, TestFiles: 1, TestCode: 30,
 			Languages: []loc.Language{{Name: "Go", Files: 2, Code: 90, TestFiles: 1, TestCode: 30}, {Name: "YAML", Files: 1, Code: 10}},
 			Largest:   []loc.File{{Path: "main.go", Lines: 90}}},
-		History: h,
+		History: h, Commits: commits, Mainline: commits,
 	}
 }
 
@@ -72,6 +72,9 @@ func TestRenderAllTabs(t *testing.T) {
 				}
 			}
 			for i := range tabNames {
+				if i == 2 { // switch to a time window partway through so both paths render
+					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune('1' + i)}})
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 				out := m.View()
@@ -97,5 +100,70 @@ func TestDisplayNames(t *testing.T) {
 			t.Errorf("displayNames = %v, want %v", got, want)
 			break
 		}
+	}
+}
+
+func TestTimeWindow(t *testing.T) {
+	key := func(m tea.Model, r rune) tea.Model {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return m
+	}
+	load := func(roots int) tea.Model {
+		var names []string
+		for i := range roots {
+			names = append(names, fmt.Sprintf("/src/repo%d", i))
+		}
+		var m tea.Model = New(Options{Roots: names, NoRemote: true})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+		for i := range roots {
+			m, _ = m.Update(localMsg{idx: i, data: sampleLocal()})
+		}
+		return m
+	}
+
+	// Single repo: t cycles the presets and skips overlap; o does nothing.
+	m := load(1)
+	var seen []windowMode
+	for range 5 {
+		m = key(m, 't')
+		seen = append(seen, m.(Model).window)
+	}
+	want := []windowMode{windowYear, windowHalf, windowQuarter, windowAll, windowYear}
+	if fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Errorf("t cycle = %v, want %v", seen, want)
+	}
+	if m = key(m, 'o'); m.(Model).window != windowYear {
+		t.Errorf("o should do nothing for one repo")
+	}
+
+	// Sample history spans ~300 days, so the last 3 months hold fewer commits than all time.
+	m = key(key(m, 't'), 't')
+	mm := m.(Model)
+	if mm.window != windowQuarter || !mm.windowed() {
+		t.Fatalf("window = %v", mm.window)
+	}
+	all, quarter := mm.repos[0].local.History.Commits, mm.repos[0].hist.Commits
+	if quarter == 0 || quarter >= all {
+		t.Errorf("3-month window has %d of %d commits", quarter, all)
+	}
+	if !strings.Contains(mm.header(), "last 3 months") {
+		t.Errorf("header doesn't show the window: %q", mm.header())
+	}
+
+	// Comparing: o jumps to overlap and back to where it was.
+	m = key(load(2), 't')
+	if m = key(m, 'o'); m.(Model).window != windowOverlap || !m.(Model).windowed() {
+		t.Errorf("o should switch to overlap")
+	}
+	if m = key(m, 'o'); m.(Model).window != windowYear {
+		t.Errorf("o should return to the previous window, got %v", m.(Model).window)
+	}
+
+	// Overlap waits for every repo, and says so.
+	var w tea.Model = New(Options{Roots: []string{"/a", "/b"}, NoRemote: true})
+	w, _ = w.Update(localMsg{idx: 0, data: sampleLocal()})
+	w = key(w, 'o')
+	if wm := w.(Model); wm.windowed() || !strings.Contains(wm.windowLabel(), "waiting") {
+		t.Errorf("overlap before load: windowed=%v label=%q", wm.windowed(), wm.windowLabel())
 	}
 }

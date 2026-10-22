@@ -16,7 +16,19 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--json` | print everything as JSON instead of opening the dashboard (an array when comparing) |
 | `--no-remote` | skip GitHub; PR counts fall back to an estimate from commit messages |
 
-Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `q` quits.
+Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap (when comparing), `q` quits.
+
+## Time window
+
+`t` cycles all time → last year → last 6 months → last 3 months (→ overlap when comparing).
+`o` jumps straight to **overlap** – from the latest first commit to the earliest last commit across the
+compared repos, so their charts cover the same dates – and pressing it again goes back to the previous window.
+The active window shows at the right of the tab bar.
+
+Everything built from history follows the window: commits, contributors, authors, the Activity charts and heatmap,
+PR sizes and most-changed files. Lines of code, languages, largest files and tests vs non-test describe the current
+tree and say so; GitHub's PR numbers always cover all time. Unlike `--since`, switching windows doesn't re-read git:
+stats are recomputed from the history already loaded.
 
 ## Tabs
 

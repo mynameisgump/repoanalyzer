@@ -186,7 +186,9 @@ func Compute(commits []gitlog.Commit, now time.Time, exists func(string) bool) S
 		s.HotFiles = s.HotFiles[:hotFileLimit]
 	}
 
-	s.Weekly = weekly(commits, s.First, s.Last)
+	if len(commits) > 0 {
+		s.Weekly = Weekly(commits, s.First, s.Last)
+	}
 	return s
 }
 
@@ -196,10 +198,8 @@ func weekStart(t time.Time) time.Time {
 	return d.AddDate(0, 0, -((int(d.Weekday()) + 6) % 7))
 }
 
-func weekly(commits []gitlog.Commit, first, last time.Time) []Bucket {
-	if len(commits) == 0 {
-		return nil
-	}
+// Weekly counts commits per Monday-start week, zero-filled from first's week through last's.
+func Weekly(commits []gitlog.Commit, first, last time.Time) []Bucket {
 	counts := map[time.Time]int{}
 	for _, c := range commits {
 		counts[weekStart(c.When)]++

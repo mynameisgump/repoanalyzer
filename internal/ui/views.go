@@ -23,14 +23,15 @@ func (m Model) overview(w int) string {
 	if !m.comparing() {
 		return m.each(w, m.overviewRepo)
 	}
-	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)") + "\n" + m.each(w, languages)
+	return m.comparison(w) + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + m.each(w, languages)
 }
 
 func (m Model) overviewRepo(r *repoState, w int) string {
-	l, h := r.local.LOC, r.local.History
+	l, h := r.local.LOC, r.hist
+	// Age is the repo's, not the time window's.
 	age := "—"
-	if h.Commits > 0 {
-		age = humanSpan(time.Since(h.First))
+	if r.local.History.Commits > 0 {
+		age = humanSpan(time.Since(r.local.History.First))
 	}
 	prLabel := "Merged PRs"
 	if r.prs == nil && r.prDone || m.opts.NoRemote {
@@ -46,7 +47,7 @@ func (m Model) overviewRepo(r *repoState, w int) string {
 		tile(prLabel, m.prValue(r)),
 	}, w)
 
-	out := tiles + "\n" + section("Languages (code lines, excl. blank)") + "\n" + languages(r, w)
+	out := tiles + "\n" + section("Languages (code lines, excl. blank)"+m.treeNote()) + "\n" + languages(r, w)
 	if len(h.Weekly) > 1 {
 		out += "\n" + section("Commits per week") + "\n" + weeklySparkline(h.Weekly, w, r.color)
 	}
@@ -59,7 +60,7 @@ func (m Model) prValue(r *repoState) string {
 	case r.prs != nil:
 		return num(r.prs.Merged)
 	case m.opts.NoRemote || r.prDone:
-		return "~" + num(r.local.History.PRsInHistory)
+		return "~" + num(r.hist.PRsInHistory)
 	}
 	return "…"
 }
@@ -72,9 +73,9 @@ func (m Model) comparison(w int) string {
 	}{
 		{"Lines of code", func(r *repoState) string { return num(r.local.LOC.Code) }},
 		{"Files", func(r *repoState) string { return num(r.local.LOC.Files) }},
-		{"Commits", func(r *repoState) string { return num(r.local.History.Commits) }},
-		{"Contributors", func(r *repoState) string { return num(len(r.local.History.Authors)) }},
-		{"Active (90d)", func(r *repoState) string { return num(r.local.History.ActiveAuthors90d) }},
+		{"Commits", func(r *repoState) string { return num(r.hist.Commits) }},
+		{"Contributors", func(r *repoState) string { return num(len(r.hist.Authors)) }},
+		{"Active (90d)", func(r *repoState) string { return num(r.hist.ActiveAuthors90d) }},
 		{"Repo age", func(r *repoState) string {
 			if r.local.History.Commits == 0 {
 				return "—"
@@ -186,16 +187,24 @@ func (m Model) authors(w int) string {
 	if m.comparing() {
 		limit = 15 // keep both repos within a reasonable scroll
 	}
-	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit) })
+	windowed := m.windowed()
+	return m.each(w, func(r *repoState, w int) string { return authorsRepo(r, w, limit, windowed) })
 }
 
-func authorsRepo(r *repoState, w, limit int) string {
-	h := r.local.History
+func authorsRepo(r *repoState, w, limit int, windowed bool) string {
+	h := r.hist
 	if len(h.Authors) == 0 {
+		if windowed {
+			return dimStyle.Render("No commits in this time window.")
+		}
 		return dimStyle.Render("No commits yet.")
 	}
-	summary := fmt.Sprintf("%s contributors · %s active in the last 90 days",
-		boldStyle.Render(num(len(h.Authors))), boldStyle.Render(num(h.ActiveAuthors90d)))
+	recent := "the last 90 days"
+	if windowed {
+		recent = "the window's last 90 days"
+	}
+	summary := fmt.Sprintf("%s contributors · %s active in %s",
+		boldStyle.Render(num(len(h.Authors))), boldStyle.Render(num(h.ActiveAuthors90d)), recent)
 
 	authors := h.Authors[:min(len(h.Authors), limit)]
 	// On narrow terminals drop the share bar and first-commit date so the table fits.
@@ -318,7 +327,7 @@ func (m Model) activity(w int) string {
 			pending = append(pending, s)
 			continue
 		}
-		h := r.local.History
+		h := r.hist
 		ls := series{name: r.name, color: r.color}
 		for _, p := range h.LinesOverTime {
 			ls.times = append(ls.times, p.Start)
@@ -350,17 +359,18 @@ func (m Model) activity(w int) string {
 	if m.comparing() {
 		out = append(out, legend(lines))
 	}
+	from, to, _, _ := m.span() // zero unless windowed, letting the charts fit the data
 	out = append(out,
-		section("Total lines over time")+"\n"+timeChart(lines, w, 12, shortNum)+"\n"+
+		section("Total lines over time")+"\n"+timeChart(lines, w, 12, shortNum, from, to)+"\n"+
 			dimStyle.Width(w).Render("All lines in tracked text files (incl. blank), rebuilt from per-commit diffs."),
-		section("Commits per week")+"\n"+timeChart(commits, w, 12, nil),
-		section("Average PR size per month (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w),
+		section("Commits per week")+"\n"+timeChart(commits, w, 12, nil, from, to),
+		section("Average PR size per month (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w, from, to),
 		section("When commits happen (local time)")+"\n"+m.punchcards(w),
 	)
 	return strings.Join(out, "\n")
 }
 
-func prSizeChart(ss []series, summaries []string, w int) string {
+func prSizeChart(ss []series, summaries []string, w int, from, to time.Time) string {
 	found := false
 	for _, s := range ss {
 		found = found || len(s.times) > 0
@@ -369,14 +379,14 @@ func prSizeChart(ss []series, summaries []string, w int) string {
 		return dimStyle.Width(w).Render("No merged PRs found in this branch's history. PRs are detected from " +
 			"\"Merge pull request #N\" commits and squash-merge titles ending in \"(#N)\"; rebase merges can't be detected.")
 	}
-	return timeChart(ss, w, 12, shortNum) + "\n" + strings.Join(summaries, "\n") + "\n" +
+	return timeChart(ss, w, 12, shortNum, from, to) + "\n" + strings.Join(summaries, "\n") + "\n" +
 		dimStyle.Width(w).Render("Lines added + deleted per PR as it landed on this branch (excl. lockfiles), "+
 			"averaged per month; months without PRs are skipped. Large PRs pull the average up, so compare with the median.")
 }
 
 // prSizeSummary is a one-line overall PR size summary for a repo.
 func (m Model) prSizeSummary(r *repoState) string {
-	ps := r.local.History.PRSizes
+	ps := r.hist.PRSizes
 	text := "no PRs detected"
 	if ps.PRs > 0 {
 		text = fmt.Sprintf("%s PRs · mean %s · median %s lines",
@@ -400,7 +410,7 @@ func (m Model) punchcards(w int) string {
 		if r.local == nil {
 			continue
 		}
-		card := punchcard(r.local.History.Punchcard, cellW)
+		card := punchcard(r.hist.Punchcard, cellW)
 		if m.comparing() {
 			name := lipgloss.NewStyle().Bold(true).Foreground(r.color).Render("● " + r.name)
 			card = lipgloss.NewStyle().MarginRight(4).MarginBottom(1).Render(name + "\n" + card)
@@ -426,7 +436,8 @@ func legend(ss []series) string {
 }
 
 // timeChart draws series as braille lines on shared axes. yFmt may be nil for plain integers.
-func timeChart(ss []series, w, h int, yFmt func(float64) string) string {
+// The x axis covers from..to (when set) and any data outside it, so every repo shares one span.
+func timeChart(ss []series, w, h int, yFmt func(float64) string, from, to time.Time) string {
 	var drawable []series
 	for _, s := range ss {
 		if len(s.times) > 1 {
@@ -437,6 +448,12 @@ func timeChart(ss []series, w, h int, yFmt func(float64) string) string {
 		return dimStyle.Render("Not enough history for a chart yet.")
 	}
 	minT, maxT, peak := drawable[0].times[0], drawable[0].times[0], 1.0
+	if !from.IsZero() && from.Before(minT) {
+		minT = from
+	}
+	if !to.IsZero() && to.After(maxT) {
+		maxT = to
+	}
 	for _, s := range drawable {
 		for i, t := range s.times {
 			if t.Before(minT) {
@@ -509,7 +526,7 @@ func punchcard(grid [7][24]int, cellW int) string {
 }
 
 func (m Model) filesRepo(r *repoState, w int) string {
-	h, l := r.local.History, r.local.LOC
+	h, l := r.hist, r.local.LOC
 	pathW := max(w-40, 20)
 
 	var hot []barRow
@@ -529,8 +546,8 @@ func (m Model) filesRepo(r *repoState, w int) string {
 		})
 	}
 	out := section("Most frequently changed (still in tree)") + "\n" + barChart(hot, w) + "\n" +
-		section("Largest files") + "\n" + barChart(big, w) + "\n" +
-		section("Tests vs non-test code") + "\n" + testSplit(l, w)
+		section("Largest files"+m.treeNote()) + "\n" + barChart(big, w) + "\n" +
+		section("Tests vs non-test code"+m.treeNote()) + "\n" + testSplit(l, w)
 	if l.Skipped > 0 {
 		out += "\n\n" + dimStyle.Render(fmt.Sprintf("%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped)))
 	}
@@ -615,7 +632,7 @@ func testSplit(l loc.Result, w int) string {
 func (m Model) pullRequestsRepo(r *repoState, w int) string {
 	fallback := dimStyle.Width(w).Render(fmt.Sprintf(
 		"From commit messages alone, history references ~%s PRs (merge commits and squash-merge titles like \"(#123)\").",
-		num(r.local.History.PRsInHistory)))
+		num(r.hist.PRsInHistory)))
 	switch {
 	case m.opts.NoRemote:
 		return dimStyle.Render("Remote lookups disabled (--no-remote).") + "\n\n" + fallback
@@ -643,6 +660,9 @@ func (m Model) pullRequestsRepo(r *repoState, w int) string {
 		rows = append(rows, barRow{label: a.Login, value: float64(a.Merged), text: num(a.Merged)})
 	}
 	out := dimStyle.Render(p.Repo) + "\n" + tiles
+	if m.windowed() {
+		out += "\n" + dimStyle.Width(w).Render("These come from GitHub and cover all time; the time window doesn't apply to them.")
+	}
 	if len(rows) > 0 {
 		out += "\n" + section(fmt.Sprintf("Top PR authors (last %d merged)", p.Sample)) + "\n" + barChart(rows, w)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethancrann/repoanalyzer/internal/remote"
 	"github.com/ethancrann/repoanalyzer/internal/report"
+	"github.com/ethancrann/repoanalyzer/internal/stats"
 )
 
 // MaxRepos is how many repos can be compared at once (one color each).
@@ -31,9 +32,12 @@ type repoState struct {
 	color    lipgloss.AdaptiveColor
 	local    *report.Local
 	localErr error
-	prs      *remote.PRStats
-	prErr    error
-	prDone   bool
+	// hist is local.History limited to the current time window; views read this.
+	hist    stats.Summary
+	windows map[windowMode]stats.Summary // hist per window, computed on first use
+	prs     *remote.PRStats
+	prErr   error
+	prDone  bool
 }
 
 type localMsg struct {
@@ -55,6 +59,8 @@ type Model struct {
 	tab           int
 	scroll        int
 	spin          spinner.Model
+	window        windowMode
+	beforeOverlap windowMode // what o returns to
 }
 
 func New(opts Options) Model {
@@ -127,6 +133,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case localMsg:
 		r := &m.repos[msg.idx]
 		r.local, r.localErr = msg.data, msg.err
+		// Overlap depends on every repo, so recompute all of them.
+		m.applyWindow()
 	case prMsg:
 		r := &m.repos[msg.idx]
 		r.prs, r.prErr, r.prDone = msg.data, msg.err, true
@@ -154,6 +162,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = min(m.scroll+m.bodyHeight(), m.maxScroll())
 		case "pgup":
 			m.scroll = max(m.scroll-m.bodyHeight(), 0)
+		case "t":
+			m.window = m.window.next(m.comparing())
+			m.applyWindow()
+		case "o":
+			if !m.comparing() {
+				break
+			}
+			if m.window == windowOverlap {
+				m.window = m.beforeOverlap
+			} else {
+				m.beforeOverlap, m.window = m.window, windowOverlap
+			}
+			m.applyWindow()
 		}
 	}
 	return m, nil
@@ -214,17 +235,34 @@ func (m Model) header() string {
 			tabs = append(tabs, inactiveTabStyle.Render(label))
 		}
 	}
+	tabRow := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	// The time window sits at the right of the tab row, or on its own line if it won't fit.
+	if label := m.windowLabel(); label != "" {
+		style := lipgloss.NewStyle().Foreground(accent)
+		if !m.windowed() {
+			style = dimStyle
+		}
+		label = style.Render("◷ " + label + " ")
+		if gap := m.width - lipgloss.Width(tabRow) - lipgloss.Width(label); gap >= 2 {
+			tabRow += strings.Repeat(" ", gap) + label
+		} else {
+			tabRow += "\n " + lipgloss.NewStyle().MaxWidth(m.width-1).Render(label)
+		}
+	}
 	rule := dimStyle.Render(strings.Repeat("─", m.width))
 	title = lipgloss.NewStyle().MaxWidth(m.width).Render(" " + title)
-	return title + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, tabs...) + "\n" + rule
+	return title + "\n" + tabRow + "\n" + rule
 }
 
 func (m Model) footer() string {
-	help := "←/→ tabs · ↑/↓ scroll · q quit"
+	help := "←/→ tabs · ↑/↓ scroll · t window · q quit"
+	if m.comparing() {
+		help = "←/→ tabs · ↑/↓ scroll · t window · o overlap · q quit"
+	}
 	if m.loading() {
 		help = m.spin.View() + " loading… · " + help
 	}
-	return dimStyle.Render(" " + help)
+	return dimStyle.MaxWidth(m.width).Render(" " + help)
 }
 
 // body renders the active tab, padded one column from the left edge.
