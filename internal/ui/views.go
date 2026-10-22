@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -255,10 +257,18 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool) string {
 	return out
 }
 
-// prSizesByAuthor charts each author's average PR size, most prolific first.
+// prSizesByAuthor charts each author's average PR size, largest average first.
 func prSizesByAuthor(ps stats.PRSizeStats, w, limit int, all bool) string {
-	n, more := listCut(len(ps.ByAuthor), limit, all)
-	authors := ps.ByAuthor[:n]
+	// Largest average first; ByAuthor itself stays most-PRs-first for --json.
+	authors := slices.Clone(ps.ByAuthor)
+	sort.SliceStable(authors, func(i, j int) bool {
+		if authors[i].MeanLines != authors[j].MeanLines {
+			return authors[i].MeanLines > authors[j].MeanLines
+		}
+		return authors[i].PRs > authors[j].PRs
+	})
+	n, more := listCut(len(authors), limit, all)
+	authors = authors[:n]
 	labelW := 0
 	for _, a := range authors {
 		labelW = max(labelW, min(lipgloss.Width(a.Name), 24))
