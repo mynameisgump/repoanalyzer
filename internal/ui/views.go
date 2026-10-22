@@ -361,16 +361,16 @@ func (m Model) activity(w int) string {
 	}
 	from, to, _, _ := m.span() // zero unless windowed, letting the charts fit the data
 	out = append(out,
-		section("Total lines over time")+"\n"+timeChart(lines, w, 12, shortNum, from, to)+"\n"+
+		section(activityCharts[0])+"\n"+timeChart(lines, w, m.chartH(), shortNum, from, to)+"\n"+
 			dimStyle.Width(w).Render("All lines in tracked text files (incl. blank), rebuilt from per-commit diffs."),
-		section("Commits per week")+"\n"+timeChart(commits, w, 12, nil, from, to),
-		section("Average PR size per month (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w, from, to),
+		section(activityCharts[1])+"\n"+timeChart(commits, w, m.chartH(), nil, from, to),
+		section(activityCharts[2]+" (lines changed)")+"\n"+prSizeChart(prSizes, prSummaries, w, m.chartH(), from, to),
 		section("When commits happen (local time)")+"\n"+m.punchcards(w),
 	)
 	return strings.Join(out, "\n")
 }
 
-func prSizeChart(ss []series, summaries []string, w int, from, to time.Time) string {
+func prSizeChart(ss []series, summaries []string, w, h int, from, to time.Time) string {
 	found := false
 	for _, s := range ss {
 		found = found || len(s.times) > 0
@@ -379,7 +379,7 @@ func prSizeChart(ss []series, summaries []string, w int, from, to time.Time) str
 		return dimStyle.Width(w).Render("No merged PRs found in this branch's history. PRs are detected from " +
 			"\"Merge pull request #N\" commits and squash-merge titles ending in \"(#N)\"; rebase merges can't be detected.")
 	}
-	return timeChart(ss, w, 12, shortNum, from, to) + "\n" + strings.Join(summaries, "\n") + "\n" +
+	return timeChart(ss, w, h, shortNum, from, to) + "\n" + strings.Join(summaries, "\n") + "\n" +
 		dimStyle.Width(w).Render("Lines added + deleted per PR as it landed on this branch (excl. lockfiles), "+
 			"averaged per month; months without PRs are skipped. Large PRs pull the average up, so compare with the median.")
 }

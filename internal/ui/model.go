@@ -26,6 +26,8 @@ type Options struct {
 
 var tabNames = []string{"Overview", "Authors", "Activity", "Files", "Pull Requests"}
 
+const activityTab = 2
+
 // repoState is one repo's data as it arrives.
 type repoState struct {
 	name     string
@@ -61,6 +63,7 @@ type Model struct {
 	spin          spinner.Model
 	window        windowMode
 	beforeOverlap windowMode // what o returns to
+	chartHeight   int        // Activity line chart rows; 0 means defaultChartH
 }
 
 func New(opts Options) Model {
@@ -162,6 +165,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = min(m.scroll+m.bodyHeight(), m.maxScroll())
 		case "pgup":
 			m.scroll = max(m.scroll-m.bodyHeight(), 0)
+		case "+", "=":
+			if m.tab == activityTab {
+				m.resizeCharts(chartStep)
+			}
+		case "-", "_":
+			if m.tab == activityTab {
+				m.resizeCharts(-chartStep)
+			}
 		case "t":
 			m.window = m.window.next(m.comparing())
 			m.applyWindow()
@@ -236,13 +247,20 @@ func (m Model) header() string {
 		}
 	}
 	tabRow := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-	// The time window sits at the right of the tab row, or on its own line if it won't fit.
+	// View settings sit at the right of the tab row, or on their own line if they won't fit.
+	var settings []string
+	if label := m.chartLabel(); label != "" {
+		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+	}
 	if label := m.windowLabel(); label != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
 		if !m.windowed() {
 			style = dimStyle
 		}
-		label = style.Render("◷ " + label + " ")
+		settings = append(settings, style.Render("◷ "+label))
+	}
+	if len(settings) > 0 {
+		label := strings.Join(settings, "  ") + " "
 		if gap := m.width - lipgloss.Width(tabRow) - lipgloss.Width(label); gap >= 2 {
 			tabRow += strings.Repeat(" ", gap) + label
 		} else {
@@ -255,14 +273,25 @@ func (m Model) header() string {
 }
 
 func (m Model) footer() string {
-	help := "←/→ tabs · ↑/↓ scroll · t window · q quit"
+	keys := []string{"←/→ tabs", "↑/↓ scroll", "t window"}
 	if m.comparing() {
-		help = "←/→ tabs · ↑/↓ scroll · t window · o overlap · q quit"
+		keys = append(keys, "o overlap")
 	}
+	if m.tab == activityTab {
+		keys = append(keys, "+/- chart height")
+	}
+	keys = append(keys, "q quit")
+	prefix := " "
 	if m.loading() {
-		help = m.spin.View() + " loading… · " + help
+		prefix = " " + m.spin.View() + " loading… · "
 	}
-	return dimStyle.MaxWidth(m.width).Render(" " + help)
+	// Drop the navigation hints first if everything won't fit.
+	help := prefix + strings.Join(keys, " · ")
+	for len(keys) > 4 && lipgloss.Width(help) > m.width {
+		keys = keys[1:]
+		help = prefix + strings.Join(keys, " · ")
+	}
+	return dimStyle.MaxWidth(m.width).Render(help)
 }
 
 // body renders the active tab, padded one column from the left edge.
@@ -274,7 +303,7 @@ func (m Model) body() string {
 		s = m.overview(w)
 	case 1:
 		s = m.authors(w)
-	case 2:
+	case activityTab:
 		s = m.activity(w)
 	case 3:
 		s = m.each(w, m.filesRepo)

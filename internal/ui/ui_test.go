@@ -76,6 +76,9 @@ func TestRenderAllTabs(t *testing.T) {
 					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune('1' + i)}})
+				if i == activityTab {
+					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 				out := m.View()
 				if got := strings.Count(out, "\n") + 1; got != size[1] {
@@ -188,5 +191,58 @@ func TestTruncatePath(t *testing.T) {
 	}
 	if got := truncatePath("a-very-long-file-name.go", 10); got != "…e-name.go" {
 		t.Errorf("no folders: %q", got)
+	}
+}
+
+func TestChartHeight(t *testing.T) {
+	key := func(m tea.Model, r rune) tea.Model {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return m
+	}
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	lines := func(m tea.Model) int { return strings.Count(m.(Model).body(), "\n") + 1 }
+
+	// Outside Activity the keys do nothing.
+	if m = key(m, '+'); m.(Model).chartH() != defaultChartH {
+		t.Errorf("+ on Overview changed the height to %d", m.(Model).chartH())
+	}
+
+	m = key(m, '3')
+	before := lines(m)
+	m = key(m, '+')
+	if got := m.(Model).chartH(); got != defaultChartH+chartStep {
+		t.Fatalf("height after + = %d", got)
+	}
+	// Three charts each grow by one step.
+	if got := lines(m) - before; got != 3*chartStep {
+		t.Errorf("body grew by %d lines, want %d", got, 3*chartStep)
+	}
+	if !strings.Contains(m.(Model).header(), "↕ 16 rows") {
+		t.Errorf("header doesn't show the height")
+	}
+
+	for range 20 {
+		m = key(m, '+')
+	}
+	if got, want := m.(Model).chartH(), m.(Model).bodyHeight()-3; got != want {
+		t.Errorf("max height = %d, want %d (one chart and its title fill the screen)", got, want)
+	}
+	for range 20 {
+		m = key(m, '-')
+	}
+	if got := m.(Model).chartH(); got != minChartH {
+		t.Errorf("min height = %d, want %d", got, minChartH)
+	}
+
+	// Growing the charts keeps the chart at the top of the screen in place.
+	mm := m.(Model)
+	mm.chartHeight = 0
+	mm.scroll = chartStarts(mm.body())[1] + 2 // a little way into the commits chart
+	m = key(mm, '=')
+	mm = m.(Model)
+	if got, want := mm.scroll, chartStarts(mm.body())[1]+2; got != want {
+		t.Errorf("scroll = %d, want %d", got, want)
 	}
 }

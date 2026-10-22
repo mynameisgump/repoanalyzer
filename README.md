@@ -2,8 +2,22 @@
 
 Terminal dashboard of stats and charts for the git repo you run it in.
 
+## Install
+
+Needs Go 1.24+ (`brew install go`). From a clone of this repo:
+
 ```sh
-go build -o bin/repoanalyzer ./cmd/repoanalyzer   # or: go install ./cmd/repoanalyzer
+./install.sh                         # builds and installs to ~/.local/bin
+./install.sh --dir /usr/local/bin    # somewhere else (uses sudo if it has to)
+./install.sh --uninstall
+```
+
+The script tells you if the install directory isn't on your `PATH` yet. For pull request stats, also
+install the GitHub CLI (`brew install gh && gh auth login`); without it the PR numbers are estimated from commit messages.
+
+## Usage
+
+```sh
 cd some/repo && repoanalyzer
 repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 ```
@@ -16,7 +30,8 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--json` | print everything as JSON instead of opening the dashboard (an array when comparing) |
 | `--no-remote` | skip GitHub; PR counts fall back to an estimate from commit messages |
 
-Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap (when comparing), `q` quits.
+Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap (when comparing),
+`+`/`-` make the Activity charts taller or shorter, `q` quits.
 
 ## Time window
 
@@ -34,7 +49,8 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – lines of code, files, commits, contributors, repo age, merged PRs, languages, weekly commit sparkline
 - **Authors** – contributors by commits with share, lines added/removed, first/last commit, and average PR size (lines changed) per author
-- **Activity** – total lines over time, commits per week, average PR size per month, and a day × hour heatmap
+- **Activity** – total lines over time, commits per week, average PR size per month, and a day × hour heatmap.
+  `+`/`-` resize the line charts in 4-row steps (6 rows up to a full screen); taller charts show finer detail, not just bigger lines
 - **Files** – most frequently changed files, the largest files, and how much of the code is tests (overall and per language)
 - **Pull Requests** – open/merged/closed counts, median time to merge, top PR authors (via `gh`)
 
