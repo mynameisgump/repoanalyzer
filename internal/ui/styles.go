@@ -20,6 +20,8 @@ var (
 
 	activeTabStyle   = lipgloss.NewStyle().Bold(true).Foreground(accent).Underline(true).Padding(0, 1)
 	inactiveTabStyle = lipgloss.NewStyle().Foreground(subtle).Padding(0, 1)
+	// Whatever clickable thing the mouse is over.
+	hoverStyle = lipgloss.NewStyle().Foreground(accent).Background(lipgloss.AdaptiveColor{Light: "#E4E0FA", Dark: "#332D5C"})
 
 	tileStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

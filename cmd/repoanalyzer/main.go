@@ -27,6 +27,8 @@ func main() {
 	since := flag.String("since", "", `only include history after this date (git syntax, e.g. "6 months ago" or 2025-01-01)`)
 	asJSON := flag.Bool("json", false, "print stats as JSON instead of opening the dashboard")
 	noRemote := flag.Bool("no-remote", false, "skip GitHub lookups (PR stats)")
+	allFiles := flag.Bool("all-files", false, "count data, config and docs (JSON, CSV, Markdown, …) as well as code")
+	noMouse := flag.Bool("no-mouse", false, "leave the mouse to the terminal, so dragging selects text")
 	flag.Parse()
 
 	dirs := flag.Args()
@@ -53,13 +55,17 @@ func main() {
 	}
 
 	if *asJSON {
-		if err := printJSON(ctx, roots, *since, *noRemote); err != nil {
+		if err := printJSON(ctx, roots, *since, *noRemote, *allFiles); err != nil {
 			fail(err)
 		}
 		return
 	}
 
-	p := tea.NewProgram(ui.New(ui.Options{Roots: roots, Since: *since, NoRemote: *noRemote}), tea.WithAltScreen())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if !*noMouse {
+		opts = append(opts, tea.WithMouseAllMotion())
+	}
+	p := tea.NewProgram(ui.New(ui.Options{Roots: roots, Since: *since, NoRemote: *noRemote, AllFiles: *allFiles}), opts...)
 	if _, err := p.Run(); err != nil {
 		fail(err)
 	}
@@ -77,12 +83,12 @@ type repoJSON struct {
 }
 
 // printJSON prints one object for a single repo, or an array when comparing.
-func printJSON(ctx context.Context, roots []string, since string, noRemote bool) error {
+func printJSON(ctx context.Context, roots []string, since string, noRemote, allFiles bool) error {
 	results := make([]repoJSON, len(roots))
 	errs := make(chan error, len(roots))
 	for i, root := range roots {
 		go func() {
-			r, err := collect(ctx, root, since, noRemote)
+			r, err := collect(ctx, root, since, noRemote, allFiles)
 			results[i] = r
 			errs <- err
 		}()
@@ -101,7 +107,7 @@ func printJSON(ctx context.Context, roots []string, since string, noRemote bool)
 	return enc.Encode(results)
 }
 
-func collect(ctx context.Context, root, since string, noRemote bool) (repoJSON, error) {
+func collect(ctx context.Context, root, since string, noRemote, allFiles bool) (repoJSON, error) {
 	var out repoJSON
 	prDone := make(chan struct{})
 	if !noRemote {
@@ -117,7 +123,7 @@ func collect(ctx context.Context, root, since string, noRemote bool) (repoJSON, 
 		close(prDone)
 	}
 
-	local, err := report.CollectLocal(ctx, root, since)
+	local, err := report.CollectLocal(ctx, root, since, allFiles)
 	<-prDone
 	out.Local = local
 	return out, err

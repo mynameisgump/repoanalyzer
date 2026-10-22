@@ -46,14 +46,16 @@ func Detect(path string) string {
 	return "Other"
 }
 
-// Languages that hold data, config or prose rather than program logic.
+// Languages that hold data, config, prose or editor-saved assets rather than
+// program logic. Other covers every extension Detect doesn't know.
 var nonCode = map[string]bool{
 	"JSON": true, "YAML": true, "TOML": true, "XML": true, "INI": true, "CSV": true, "SVG": true,
-	"Markdown": true, "reStructuredText": true, "TeX": true, "Text": true, "Other": true,
+	"Markdown": true, "reStructuredText": true, "TeX": true, "Text": true,
+	"Godot Scene": true, "Godot Resource": true, "Other": true,
 }
 
 // IsCode reports whether a language from Detect is a programming language,
-// as opposed to data, config or docs (which test fixtures are often made of).
+// as opposed to data, config, docs or assets.
 func IsCode(lang string) bool {
 	return !nonCode[lang]
 }

@@ -21,6 +21,10 @@ type Local struct {
 	Since   string        `json:"since,omitempty"`
 	LOC     loc.Result    `json:"loc"`
 	History stats.Summary `json:"history"`
+	// AllFiles keeps files that aren't code in every stat; see Skip.
+	AllFiles bool `json:"all_files"`
+	// NonCode counts the tracked files Skip leaves out as data, config, docs or assets.
+	NonCode int `json:"non_code_files"`
 
 	// The parsed history History was computed from, kept so it can be recomputed
 	// for a time window (see InWindow). Mainline is the first-parent history.
@@ -31,22 +35,32 @@ type Local struct {
 }
 
 // CollectLocal counts lines and reads history concurrently. root must be a repo top level.
-func CollectLocal(ctx context.Context, root, since string) (*Local, error) {
+// Unless allFiles is set, files that aren't code are left out; see Skip.
+func CollectLocal(ctx context.Context, root, since string, allFiles bool) (*Local, error) {
 	paths, err := loc.TrackedFiles(ctx, root)
 	if err != nil {
 		return nil, err
 	}
+	l := &Local{AllFiles: allFiles}
+	var counted []string // what loc.Count reads; it reports lockfiles as skipped itself
+	for _, p := range paths {
+		if l.Skip(p) && !loc.IsIgnored(p) {
+			l.NonCode++
+			continue
+		}
+		counted = append(counted, p)
+	}
 
 	var (
 		wg                  sync.WaitGroup
-		counted             loc.Result
+		lines               loc.Result
 		commits, mainline   []gitlog.Commit
 		logErr, mainlineErr error
 	)
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		counted = loc.Count(root, paths)
+		lines = loc.Count(root, counted)
 	}()
 	go func() {
 		defer wg.Done()
@@ -72,17 +86,9 @@ func CollectLocal(ctx context.Context, root, since string) (*Local, error) {
 	if branch == "" {
 		branch = "detached"
 	}
-	l := &Local{
-		Repo:     filepath.Base(root),
-		Root:     root,
-		Branch:   branch,
-		Since:    since,
-		LOC:      counted,
-		Commits:  commits,
-		Mainline: mainline,
-		tracked:  tracked,
-		names:    make(map[string]string, len(commits)),
-	}
+	l.Repo, l.Root, l.Branch, l.Since, l.LOC = filepath.Base(root), root, branch, since, lines
+	l.Commits, l.Mainline, l.tracked = commits, mainline, tracked
+	l.names = make(map[string]string, len(commits))
 	// Lets PR sizes credit a merge commit to whoever wrote the PR branch, even
 	// when the branch started before a time window does.
 	for _, c := range commits {
@@ -90,18 +96,25 @@ func CollectLocal(ctx context.Context, root, since string) (*Local, error) {
 	}
 	l.History = l.compute(commits, mainline, time.Now())
 	// Diffs count blank lines too, so anchor on total lines rather than code lines.
-	l.History.LinesOverTime = stats.LinesOverTime(mainline, counted.Lines, loc.IsIgnored)
+	l.History.LinesOverTime = stats.LinesOverTime(mainline, lines.Lines, l.Skip)
 	return l, nil
+}
+
+// Skip reports whether a path is left out of every stat: lockfiles always, and
+// unless AllFiles is set, files that aren't in a programming language (data,
+// config, docs and assets like JSON, CSV, Markdown or Godot scenes; see loc.IsCode).
+func (l *Local) Skip(p string) bool {
+	return loc.IsIgnored(p) || !l.AllFiles && !loc.IsCode(loc.Detect(p))
 }
 
 // compute derives every history stat except LinesOverTime from the given commits.
 func (l *Local) compute(commits, mainline []gitlog.Commit, now time.Time) stats.Summary {
-	paths := stats.Paths{IsTest: loc.IsTest, Skip: loc.IsIgnored}
+	paths := stats.Paths{IsTest: loc.IsTest, Skip: l.Skip}
 	if l.tracked != nil {
-		paths.Exists = func(p string) bool { return l.tracked[p] && !loc.IsIgnored(p) }
+		paths.Exists = func(p string) bool { return l.tracked[p] }
 	}
 	s := stats.Compute(commits, now, paths)
-	s.PRSizes = stats.PRSizes(mainline, l.names, loc.IsIgnored)
+	s.PRSizes = stats.PRSizes(mainline, l.names, l.Skip)
 	return s
 }
 

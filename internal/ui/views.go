@@ -696,9 +696,15 @@ func (m Model) filesRepo(r *repoState, w int) []string {
 		section("Most frequently changed (still in tree)"+title) + "\n" + withNote(fileChart(hot, w, filter), hotMore),
 		section("Largest files"+title+m.treeNote()) + "\n" + withNote(fileChart(big, w, filter), bigMore),
 	}
+	var left []string
+	if r.local.NonCode > 0 {
+		left = append(left, fmt.Sprintf("%s data, config and doc files left out (--all-files keeps them).", num(r.local.NonCode)))
+	}
 	if l.Skipped > 0 {
-		sections = append(sections, "\n"+dimStyle.Width(w).Render(fmt.Sprintf(
-			"%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped))))
+		left = append(left, fmt.Sprintf("%s tracked files skipped (binary, lockfiles, >4MB, or missing).", num(l.Skipped)))
+	}
+	if len(left) > 0 {
+		sections = append(sections, "\n"+dimStyle.Width(w).Render(strings.Join(left, "\n")))
 	}
 	return sections
 }

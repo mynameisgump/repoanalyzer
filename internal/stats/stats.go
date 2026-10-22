@@ -90,7 +90,7 @@ type Summary struct {
 type Paths struct {
 	Exists func(string) bool // still in the tree; hot files keep only these
 	IsTest func(string) bool
-	Skip   func(string) bool // not written by anyone (lockfiles); left out of test shares
+	Skip   func(string) bool // left out of every file stat (e.g. lockfiles); the commit still counts
 }
 
 // PRSizeStats describes how big PRs were when they landed on the branch.
@@ -172,6 +172,9 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 
 		var share TestShare
 		for _, f := range c.Files {
+			if paths.Skip != nil && paths.Skip(f.Path) {
+				continue
+			}
 			a.Added += f.Added
 			a.Deleted += f.Deleted
 			s.Added += f.Added
@@ -185,9 +188,6 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 			hf.Added += f.Added
 			hf.Deleted += f.Deleted
 
-			if paths.Skip != nil && paths.Skip(f.Path) {
-				continue
-			}
 			share.Commits = 1
 			share.Added += f.Added
 			if hf.Test {

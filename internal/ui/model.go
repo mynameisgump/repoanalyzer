@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -23,6 +24,7 @@ type Options struct {
 	Roots    []string // repo top-level directories; more than one compares them
 	Since    string
 	NoRemote bool
+	AllFiles bool // keep data, config and docs in the stats
 }
 
 var tabNames = []string{"Overview", "Authors", "Activity", "Files", "Pull Requests"}
@@ -82,6 +84,10 @@ type Model struct {
 	headings []int
 	// columnsOn is whether repos are side by side right now; see fitColumns.
 	columnsOn bool
+	// pointer is the last cell the mouse was seen over; whatever clickable
+	// thing is there is drawn highlighted. pointerSeen is false until then.
+	pointerX, pointerY int
+	pointerSeen        bool
 }
 
 func New(opts Options) Model {
@@ -116,7 +122,7 @@ func displayNames(roots []string) []string {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.spin.Tick}
 	for i, root := range m.opts.Roots {
-		cmds = append(cmds, loadLocal(i, root, m.opts.Since))
+		cmds = append(cmds, loadLocal(i, root, m.opts.Since, m.opts.AllFiles))
 		if !m.opts.NoRemote {
 			cmds = append(cmds, loadPRs(i, root))
 		}
@@ -124,9 +130,9 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func loadLocal(idx int, root, since string) tea.Cmd {
+func loadLocal(idx int, root, since string, allFiles bool) tea.Cmd {
 	return func() tea.Msg {
-		d, err := report.CollectLocal(context.Background(), root, since)
+		d, err := report.CollectLocal(context.Background(), root, since, allFiles)
 		return localMsg{idx, d, err}
 	}
 }
@@ -230,6 +236,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rerender = true
 			}
 		}
+	case tea.MouseMsg:
+		// A click on something with a key presses that key; the wheel scrolls.
+		// Plain movement only moves the highlight, which View draws.
+		m.pointerX, m.pointerY, m.pointerSeen = msg.X, msg.Y, true
+		if key := m.mouse(msg); key != "" {
+			return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		}
+		rerender = false
 	default:
 		rerender = false
 	}
@@ -303,6 +317,21 @@ func (m Model) View() string {
 	if m.width < 64 || m.height < 12 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dimStyle.Render("window too small"))
 	}
+	visible := m.visibleLines()
+	if row := m.pointerY - lipgloss.Height(m.header()); m.pointerSeen && row >= 0 && row < len(visible) {
+		// visible can share content's lines, so copy before highlighting one.
+		visible = slices.Clone(visible)
+		visible[row] = m.highlight(visible[row], 0, noteSpots(visible[row], m.pointerY)...)
+	}
+	for len(visible) < m.bodyHeight() {
+		visible = append(visible, "")
+	}
+	return m.header() + "\n" + strings.Join(visible, "\n") + "\n" + m.footer()
+}
+
+// visibleLines is the part of content the body shows at the current scroll,
+// with the sticky heading pinned over its top line.
+func (m Model) visibleLines() []string {
 	lines := m.content
 	h := m.bodyHeight()
 	off := min(m.scroll, max(len(lines)-h, 0))
@@ -310,13 +339,17 @@ func (m Model) View() string {
 	if top := m.stickyHeading(off); top >= 0 && len(visible) > 0 {
 		visible = append([]string{lines[top]}, visible[1:]...)
 	}
-	for len(visible) < h {
-		visible = append(visible, "")
-	}
-	return m.header() + "\n" + strings.Join(visible, "\n") + "\n" + m.footer()
+	return visible
 }
 
 func (m Model) header() string {
+	s, _ := m.headerLayout()
+	return s
+}
+
+// headerLayout renders the header along with where its clickable parts are.
+func (m Model) headerLayout() (string, []hotspot) {
+	var spots []hotspot
 	title := titleStyle.Render("repoanalyzer")
 	for _, r := range m.repos {
 		label := r.name
@@ -331,20 +364,34 @@ func (m Model) header() string {
 	if m.opts.Since != "" {
 		title += dimStyle.Render("  since " + m.opts.Since)
 	}
+	if m.opts.AllFiles {
+		title += dimStyle.Render("  all files")
+	}
 	var tabs []string
+	x := 0
 	for i, name := range tabNames {
-		label := string(rune('1'+i)) + " " + name
+		key := string(rune('1' + i))
+		label := key + " " + name
+		tab := inactiveTabStyle.Render(label)
 		if i == m.tab {
-			tabs = append(tabs, activeTabStyle.Render(label))
-		} else {
-			tabs = append(tabs, inactiveTabStyle.Render(label))
+			tab = activeTabStyle.Render(label)
 		}
+		spot := hotspot{y: 1, x: x, w: lipgloss.Width(tab), key: key}
+		// The current tab doesn't light up: clicking it changes nothing you'd notice.
+		if i != m.tab {
+			tab = m.highlight(tab, x, spot)
+		}
+		tabs = append(tabs, tab)
+		spots = append(spots, spot)
+		x += spot.w
 	}
 	tabRow := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 	// View settings sit at the right of the tab row, or on their own line if they won't fit.
-	var settings []string
+	// Clicking one does what its key does.
+	var settings, settingKeys []string
 	if label := m.chartLabel(); label != "" {
 		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+		settingKeys = append(settingKeys, "")
 	}
 	if label := m.columnsLabel(); label != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
@@ -352,9 +399,11 @@ func (m Model) header() string {
 			style = dimStyle
 		}
 		settings = append(settings, style.Render(label))
+		settingKeys = append(settingKeys, "c")
 	}
 	if label := m.filterLabel(); label != "" {
 		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+		settingKeys = append(settingKeys, "f")
 	}
 	if label := m.windowLabel(); label != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
@@ -362,10 +411,23 @@ func (m Model) header() string {
 			style = dimStyle
 		}
 		settings = append(settings, style.Render("◷ "+label))
+		settingKeys = append(settingKeys, "t")
 	}
 	if len(settings) > 0 {
 		label := strings.Join(settings, "  ") + " "
-		if gap := m.width - lipgloss.Width(tabRow) - lipgloss.Width(label); gap >= 2 {
+		y, x := 1, m.width-lipgloss.Width(label)
+		gap := m.width - lipgloss.Width(tabRow) - lipgloss.Width(label)
+		if gap < 2 {
+			y, x = 2, 1
+		}
+		for i, s := range settings {
+			spot := hotspot{y: y, x: x, w: lipgloss.Width(s), key: settingKeys[i]}
+			settings[i] = m.highlight(s, x, spot)
+			spots = append(spots, spot)
+			x += spot.w + 2
+		}
+		label = strings.Join(settings, "  ") + " "
+		if gap >= 2 {
 			tabRow += strings.Repeat(" ", gap) + label
 		} else {
 			tabRow += "\n " + lipgloss.NewStyle().MaxWidth(m.width-1).Render(label)
@@ -373,35 +435,71 @@ func (m Model) header() string {
 	}
 	rule := dimStyle.Render(strings.Repeat("─", m.width))
 	title = lipgloss.NewStyle().MaxWidth(m.width).Render(" " + title)
-	return title + "\n" + tabRow + "\n" + rule
+	return title + "\n" + tabRow + "\n" + rule, spots
 }
 
 func (m Model) footer() string {
-	keys := []string{"←/→ tabs", "↑/↓ scroll", "t window"}
+	s, _ := m.footerLayout()
+	return s
+}
+
+// footerLayout renders the key hints along with where each one is, so a
+// click on a hint can press its key.
+func (m Model) footerLayout() (string, []hotspot) {
+	type hint struct{ text, key string }
+	keys := []hint{{"←/→ tabs", ""}, {"↑/↓ scroll", ""}, {"t window", "t"}}
 	if m.comparing() {
-		keys = append(keys, "o overlap", "c columns")
+		keys = append(keys, hint{"o overlap", "o"}, hint{"c columns", "c"})
 	}
 	if m.tab == activityTab {
-		keys = append(keys, "+/- chart height")
+		keys = append(keys, hint{"+/- chart height", "+-"})
 	}
 	if m.tab == authorsTab {
-		keys = append(keys, "s sort PRs")
+		keys = append(keys, hint{"s sort PRs", "s"})
 	}
 	if m.tab == filesTab {
-		keys = append(keys, "f test filter")
+		keys = append(keys, hint{"f test filter", "f"})
 	}
-	keys = append(keys, "q quit")
+	keys = append(keys, hint{"q quit", "q"})
 	prefix := " "
 	if m.loading() {
 		prefix = " " + m.spin.View() + " loading… · "
 	}
+	join := func() string {
+		var texts []string
+		for _, k := range keys {
+			texts = append(texts, k.text)
+		}
+		return prefix + strings.Join(texts, " · ")
+	}
 	// Drop the navigation hints first if everything won't fit.
-	help := prefix + strings.Join(keys, " · ")
+	help := join()
 	for len(keys) > 4 && lipgloss.Width(help) > m.width {
 		keys = keys[1:]
-		help = prefix + strings.Join(keys, " · ")
+		help = join()
 	}
-	return dimStyle.MaxWidth(m.width).Render(help)
+	// A one-key hint is clickable all over; with several keys, each is
+	// clickable where it appears in the text.
+	y := m.height - 1
+	var spots []hotspot
+	var parts []string
+	x := lipgloss.Width(prefix)
+	for _, k := range keys {
+		var own []hotspot
+		if len(k.key) == 1 {
+			own = append(own, hotspot{y: y, x: x, w: lipgloss.Width(k.text), key: k.key})
+		} else {
+			for _, r := range k.key {
+				at := strings.IndexRune(k.text, r)
+				own = append(own, hotspot{y: y, x: x + lipgloss.Width(k.text[:at]), w: 1, key: string(r)})
+			}
+		}
+		parts = append(parts, m.highlight(dimStyle.Render(k.text), x, own...))
+		spots = append(spots, own...)
+		x += lipgloss.Width(k.text) + lipgloss.Width(" · ")
+	}
+	help = dimStyle.Render(prefix) + strings.Join(parts, dimStyle.Render(" · "))
+	return lipgloss.NewStyle().MaxWidth(m.width).Render(help), spots
 }
 
 // body renders the active tab, padded one column from the left edge.

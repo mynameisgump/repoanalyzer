@@ -149,7 +149,14 @@ func TestTestShares(t *testing.T) {
 		s.TestsMonthly[0].TestCommits != 1 || s.TestsMonthly[1].Commits != 1 {
 		t.Errorf("monthly = %+v", s.TestsMonthly)
 	}
+	// Skipped files are left out of every file stat, but their commits still count.
+	if bob := s.Authors[0]; bob.Name != "Bob" || bob.Commits != 3 || bob.Added != 20 {
+		t.Errorf("bob = %+v, want 3 commits and 20 lines added (go.sum skipped)", bob)
+	}
 	for _, f := range s.HotFiles {
+		if f.Path == "go.sum" {
+			t.Errorf("skipped go.sum is a hot file")
+		}
 		if f.Test != strings.HasSuffix(f.Path, "_test.go") {
 			t.Errorf("%s: test = %v", f.Path, f.Test)
 		}

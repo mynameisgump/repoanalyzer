@@ -37,10 +37,15 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--since "6 months ago"` | limit history stats (any `git log --since` value) |
 | `--json` | print everything as JSON instead of opening the dashboard (an array when comparing) |
 | `--no-remote` | skip GitHub; PR counts fall back to an estimate from commit messages |
+| `--all-files` | count data, config and docs too (JSON, CSV, YAML, Markdown, Godot scenes, …); by default only code counts |
+| `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
 `+`/`-` make the Activity charts taller or shorter, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
 (wherever you see "+ N more"; press again to show fewer), `q` quits.
+
+Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does; anything clickable lights up under the pointer.
+While the dashboard has the mouse, hold Shift (Option in iTerm2) to select text, or run with `--no-mouse`.
 
 ## Time window
 
@@ -81,6 +86,9 @@ squeezed), they stay stacked and the header says so.
   The same pass gives PR sizes: a PR merge commit's first-parent diff (or a squash commit's diff) is the whole PR.
   Squash commits are credited to their author; merge commits to the author of the PR branch's last commit, since the merge itself is authored by whoever clicked merge.
 - `internal/loc` counts lines in `git ls-files` in parallel, skipping binaries, lockfiles and files >4MB.
+  Unless `--all-files` is given, files that aren't in a programming language (data, config, docs, assets like Godot
+  `.tscn`/`.tres`, and unrecognized extensions) are left out of every stat: line counts, languages, file lists,
+  lines added/deleted, PR sizes and lines over time. Commits that only touch them still count as commits.
   Test files are recognized by path and name (`tests/`, `__tests__/`, `spec/`, `foo_test.go`, `foo.test.ts`, `test_foo.py`, `FooTest.java`, …);
   tests written inside source files, like Rust's `#[cfg(test)]`, aren't.
 - `internal/stats` holds the pure aggregation logic (unit tested).
