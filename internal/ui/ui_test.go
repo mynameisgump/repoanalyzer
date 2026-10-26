@@ -262,6 +262,41 @@ func TestChartHeight(t *testing.T) {
 	}
 }
 
+// On Authors, p cycles what Commits by author counts over and a cycles which
+// top author it picks out; neither does anything on other tabs.
+func TestAuthorPeriodAndFocus(t *testing.T) {
+	key := func(m tea.Model, r rune) tea.Model {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return m
+	}
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	if m = key(key(m, 'p'), 'a'); m.(Model).authorPeriod != perTwoWeeks || m.(Model).repos[0].focused != nil {
+		t.Errorf("p and a changed something on Overview")
+	}
+
+	m = key(m, '2')
+	for _, want := range []string{"2 weeks", "month", "week", "2 weeks"} {
+		if !strings.Contains(m.(Model).body(), "Commits by author per "+want+" (top") {
+			t.Errorf("title doesn't say per %s", want)
+		}
+		label := m.(Model).header()
+		if shown := strings.Contains(label, "per "+want); shown != (want != "2 weeks") {
+			t.Errorf("per %s in the header: %v", want, shown)
+		}
+		m = key(m, 'p')
+	}
+
+	// Authors are Ada, Bob and the long name, 20 commits each: by name.
+	for _, want := range []string{"◎ A very long author name indeed", "◎ Ada", "◎ Bob", ""} {
+		m = key(m, 'a')
+		if label := m.(Model).focusLabel(); label != want {
+			t.Errorf("focus label = %q, want %q", label, want)
+		}
+	}
+}
+
 // Scrolling must reuse the rendered tab: re-rendering Activity takes milliseconds per keypress.
 func TestScrollDoesNotRerender(t *testing.T) {
 	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})

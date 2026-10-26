@@ -48,6 +48,8 @@ type repoState struct {
 	prs     *remote.PRStats
 	prErr   error
 	prDone  bool
+	// focused are the authors Commits by author is limited to, by name; none means all.
+	focused []string
 }
 
 type localMsg struct {
@@ -70,13 +72,15 @@ type Model struct {
 	scroll        int
 	spin          spinner.Model
 	window        windowMode
-	beforeOverlap windowMode // what o returns to
-	chartHeight   int        // Activity line chart rows; 0 means defaultChartH
-	expanded      uint8      // bit per tab: e shows every row of that tab's lists
-	prSort        prSortKey  // which column orders PR size by author; s cycles it
-	fileFilter    fileFilter // test / non-test filter on Files; f cycles it
-	details       bool       // x adds the Email column to the Authors table
-	sideBySide    bool       // when comparing, c puts repos in columns instead of stacking them
+	beforeOverlap windowMode   // what o returns to
+	chartHeight   int          // Activity line chart rows; 0 means defaultChartH
+	expanded      uint8        // bit per tab: e shows every row of that tab's lists
+	prSort        prSortKey    // which column orders PR size by author; s cycles it
+	fileFilter    fileFilter   // test / non-test filter on Files; f cycles it
+	details       bool         // x adds the Email column to the Authors table
+	authorPeriod  authorPeriod // what Commits by author counts over; p cycles it
+	hover         authorRef    // whose name in a Commits by author legend the pointer is over
+	sideBySide    bool         // when comparing, c puts repos in columns instead of stacking them
 	// content is the rendered body, split into lines. Rendering a tab can take
 	// milliseconds (Activity draws several charts), so it's redone only when
 	// something shown changes; scrolling just moves a window over these lines.
@@ -230,6 +234,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.details = !m.details
 				rerender = true
 			}
+		case "p":
+			if m.tab == authorsTab {
+				m.authorPeriod = (m.authorPeriod + 1) % authorPeriods
+				rerender = true
+			}
+		case "a":
+			if m.tab == authorsTab {
+				m.cycleFocus()
+				rerender = true
+			}
 		case "t":
 			m.window = m.window.next(m.comparing())
 			m.applyWindow()
@@ -254,8 +268,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prSort = prSortKey(by[0] - '0')
 			break
 		}
+		if a, ok := m.legendAuthor(key); ok {
+			m.toggleFocus(a)
+			break
+		}
 		if key != "" {
 			return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		}
+		// Hovering a name in a Commits by author legend redraws the chart with
+		// that author picked out.
+		if a := m.hoveredAuthor(); a != m.hover {
+			m.hover = a
+			break
 		}
 		rerender = false
 	default:
@@ -320,6 +344,7 @@ func (m Model) stickyHeading(off int) int {
 func (m *Model) setTab(t int) {
 	m.tab = t
 	m.scroll = 0
+	m.hover = authorRef{}
 }
 
 func (m Model) bodyHeight() int {
@@ -443,6 +468,14 @@ func (m Model) headerLayout() (string, []hotspot) {
 		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
 		settingKeys = append(settingKeys, "f")
 	}
+	if label := m.periodLabel(); label != "" {
+		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+		settingKeys = append(settingKeys, "p")
+	}
+	if label := m.focusLabel(); label != "" {
+		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+		settingKeys = append(settingKeys, "a")
+	}
 	if label := m.windowLabel(); label != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
 		if !m.windowed() {
@@ -504,6 +537,10 @@ func (m Model) footerLayout() (string, []hotspot) {
 			keys = append(keys, hint{"x fewer details", "x"})
 		} else {
 			keys = append(keys, hint{"x more details", "x"})
+		}
+		keys = append(keys, hint{"p period", "p"})
+		if m.focusable() > 0 {
+			keys = append(keys, hint{"a focus author", "a"})
 		}
 	}
 	switch {

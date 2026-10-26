@@ -219,7 +219,7 @@ func (m Model) authors(w int) string {
 	})
 }
 
-// topAuthorsCharted is how many authors the commits-per-week chart overlays.
+// topAuthorsCharted is how many authors Commits by author overlays.
 const topAuthorsCharted = 5
 
 // authorFigures are a repo's tiles on Authors. Every repo gets the same ones
@@ -262,37 +262,6 @@ func (m Model) authorFigures(r *repoState) []figure {
 		{"Authors for 50% of commits", busFactor},
 		{"Top author share", top},
 	}
-}
-
-// commitsByAuthorChart overlays the top authors' commits per week, one color each.
-func commitsByAuthorChart(h stats.Summary, w, height int, b chartBounds) string {
-	var ss []series
-	for i, a := range h.Authors[:min(len(h.Authors), topAuthorsCharted)] {
-		s := series{name: a.Name, color: palette[i%len(palette)]}
-		for _, wk := range h.AuthorsWeekly {
-			s.times = append(s.times, wk.Start)
-			s.vals = append(s.vals, float64(wk.Commits(a.Name)))
-		}
-		ss = append(ss, s)
-	}
-	chart := timeChart(ss, w, height, nil, b)
-	if len(h.AuthorsWeekly) < 2 {
-		return chart // says there isn't enough history
-	}
-	return legendRows(ss, w) + "\n" + chart
-}
-
-// legendRows is legend wrapped to w columns, breaking only between entries.
-func legendRows(ss []series, w int) string {
-	var entries []string
-	for i, s := range ss {
-		entry := lipgloss.NewStyle().Foreground(s.color).Render("━━ " + s.name)
-		if i < len(ss)-1 {
-			entry += "   "
-		}
-		entries = append(entries, entry)
-	}
-	return flow(entries, w)
 }
 
 // activeAuthorsChart plots how many authors committed each week.
@@ -380,7 +349,8 @@ func (m Model) authorsRepo(r *repoState, w, limit int, windowed, all bool, heade
 	}
 	return []string{
 		flow(figureTiles(m.authorFigures(r), widths), w),
-		section(fmt.Sprintf("%s (top %d)", authorCharts[0], topAuthorsCharted)) + "\n" + commitsByAuthorChart(h, w, m.chartH(), byAuthor),
+		section(fmt.Sprintf("%s per %s (top %d)", authorCharts[0], m.authorPeriod, topAuthorsCharted)) + "\n" +
+			m.commitsByAuthorChart(r, w, byAuthor),
 		section(authorCharts[1]) + "\n" + activeAuthorsChart(r, w, m.chartH(), active),
 		section("Contributors by commits") + "\n" + withNote(rendered, more),
 	}

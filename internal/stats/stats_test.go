@@ -75,6 +75,21 @@ func TestCompute(t *testing.T) {
 	if quiet := weeks[5]; quiet.Active != 0 || quiet.ByAuthor != nil {
 		t.Errorf("quiet week = %+v", quiet)
 	}
+
+	// Months run contiguously from Bob's month to Ada's.
+	months := s.AuthorsMonthly
+	total = 0
+	for i, mo := range months {
+		if mo.Start.Day() != 1 || i > 0 && !mo.Start.Equal(months[i-1].Start.AddDate(0, 1, 0)) {
+			t.Errorf("month %d starts %v", i, mo.Start)
+		}
+		for _, a := range mo.ByAuthor {
+			total += a.Commits
+		}
+	}
+	if total != 3 || len(months) < 7 || months[0].Commits("Bob") != 1 || months[len(months)-1].Commits("Ada") < 1 {
+		t.Errorf("monthly: %d months, %d commits: %+v", len(months), total, months)
+	}
 }
 
 func TestComputeEmpty(t *testing.T) {

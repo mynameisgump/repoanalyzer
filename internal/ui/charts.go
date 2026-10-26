@@ -17,7 +17,7 @@ const (
 // resizeCharts finds them by title.
 var (
 	activityCharts = []string{"Total lines over time", "Commits per week", "Commits touching tests per month"}
-	authorCharts   = []string{"Commits per week by author", "Active contributors per week"}
+	authorCharts   = []string{"Commits by author", "Active contributors per week"}
 	prCharts       = []string{"Average PR size per month", "Commits via PR per month"}
 	chartTitles    = slices.Concat(activityCharts, authorCharts, prCharts)
 )
@@ -69,8 +69,7 @@ func chartStarts(lines []string) []int {
 		starts[i] = -1
 	}
 	for n, line := range lines {
-		// A line is the longest title it contains: "Commits per week by author"
-		// isn't the Activity chart "Commits per week".
+		// A line is the longest title it contains, in case one title holds another.
 		best := -1
 		for i, title := range chartTitles {
 			if strings.Contains(line, title) && (best < 0 || len(title) > len(chartTitles[best])) {

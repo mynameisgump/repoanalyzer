@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -324,5 +325,80 @@ func TestFooterControls(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	if strings.Contains(footer(), "e show") {
 		t.Errorf("footer offers e on a tab with no long lists:\n%s", footer())
+	}
+}
+
+// Clicking names in the Commits by author legend limits the chart to those
+// authors, and clicking one again puts the others back; hovering a name draws
+// that author over the rest in grey.
+func TestClickFocusAuthors(t *testing.T) {
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	color := func(i int) string {
+		on, _, _ := strings.Cut(lipgloss.NewStyle().Foreground(palette[i]).Render("x"), "x")
+		return on
+	}
+	grey, _, _ := strings.Cut(dimStyle.Render("x"), "x")
+
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	at := func(text string) (x, y int) {
+		t.Helper()
+		for n, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+			if i := strings.Index(line, text); i >= 0 {
+				return ansi.StringWidth(line[:i]), n
+			}
+		}
+		t.Fatalf("%q isn't on screen:\n%s", text, ansi.Strip(m.View()))
+		return 0, 0
+	}
+	click := func(name string) {
+		t.Helper()
+		x, y := at(" " + name + "   ")
+		m, _ = m.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	}
+	// chart is the plot itself, without the legend above it.
+	chart := func() string {
+		body := m.(Model).body()
+		_, plot, _ := strings.Cut(body[strings.Index(body, "Commits by author"):], "│")
+		plot, _, _ = strings.Cut(plot, "Active contributors")
+		return plot
+	}
+
+	// Authors by rank: the long name, Ada, Bob.
+	click("Bob")
+	if got := m.(Model).repos[0].focused; !slices.Equal(got, []string{"Bob"}) {
+		t.Errorf("clicking Bob focused %v", got)
+	}
+	if c := chart(); !strings.Contains(c, color(2)) || strings.Contains(c, color(0)) || strings.Contains(c, color(1)) {
+		t.Errorf("with Bob picked out, the chart still has the others")
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "╌╌ Ada") {
+		t.Errorf("Ada isn't shown as off the chart")
+	}
+	click("Ada")
+	if got := m.(Model).focusLabel(); got != "◎ Bob, Ada" {
+		t.Errorf("header says %q after adding Ada", got)
+	}
+	click("Bob")
+	click("Ada")
+	if got := m.(Model).repos[0].focused; len(got) != 0 {
+		t.Errorf("unclicking everyone left %v", got)
+	}
+
+	// Hovering Ada greys everyone else.
+	x, y := at("━━ Ada")
+	m, _ = m.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion})
+	if got := m.(Model).hover; got != (authorRef{repo: "repo", name: "Ada"}) {
+		t.Fatalf("hover = %+v", got)
+	}
+	if c := chart(); !strings.Contains(c, color(1)) || !strings.Contains(c, grey) || strings.Contains(c, color(0)) || strings.Contains(c, color(2)) {
+		t.Errorf("hovering Ada didn't grey the others")
+	}
+	m, _ = m.Update(tea.MouseMsg{X: 100, Y: 45, Button: tea.MouseButtonNone, Action: tea.MouseActionMotion})
+	if c := chart(); m.(Model).hover != (authorRef{}) || !strings.Contains(c, color(0)) {
+		t.Errorf("moving off Ada didn't bring the colors back")
 	}
 }

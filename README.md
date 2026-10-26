@@ -41,10 +41,10 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
-`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails and direct-push counts to the Authors table,
+`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails and direct-push counts to the Authors table, `p` switches Commits by author between per 2 weeks, per month and per week, `a` steps through showing its authors one at a time,
 `e` shows every row of the current tab's lists (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
-Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, and clicking a column title in PR size by author sorts by it; anything clickable lights up under the pointer.
+Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, clicking a column title in PR size by author sorts by it, clicking names in the Commits by author legend limits the chart to those authors (click again to put one back), and hovering a name greys out everyone else's line; anything clickable lights up under the pointer.
 While the dashboard has the mouse, hold Shift (Option in iTerm2) to select text, or run with `--no-mouse`.
 
 ## Time window
@@ -63,7 +63,8 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – tiles for lines of code, files, commits, last commit, lines added/deleted, contributors, repo age,
   PRs (merged, open, median size, median time to merge) and test share; languages; weekly commit sparkline
-- **Authors** – contributors by commits with share, lines added/removed, first/last commit, and, once `x` asks for more details,
+- **Authors** – the top 5 authors' commits over time (per 2 weeks by default) and active contributors per week;
+  contributors by commits with share, lines added/removed, first/last commit, and, once `x` asks for more details,
   their email and how many of their commits were pushed without a PR
 - **Activity** – total lines over time, commits per week, the share of each month's commits
   that changed a test file, and a day × hour heatmap.
