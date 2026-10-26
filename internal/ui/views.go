@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -352,7 +353,7 @@ func (m Model) authorsRepo(r *repoState, w, limit int, windowed, all bool, heade
 	}
 	return []string{
 		flow(figureTiles(m.authorFigures(r), widths), w),
-		section(fmt.Sprintf("%s per %s (top %d)", authorCharts[0], m.authorPeriod, topAuthorsCharted)) + "\n" +
+		section(fmt.Sprintf("%s per %s (top %d, log scale)", authorCharts[0], m.authorPeriod, topAuthorsCharted)) + "\n" +
 			m.commitsByAuthorChart(r, w, byAuthor),
 		section(authorCharts[1]) + "\n" + activeAuthorsChart(r, w, m.chartH(), active),
 		section("Contributors by commits") + "\n" + withNote(rendered, more),
@@ -627,7 +628,7 @@ type series struct {
 	color lipgloss.TerminalColor
 	times []time.Time
 	vals  []float64
-	// over draws the line whole over the ones before it; see drawLines.
+	// over gives the line every cell it shares with others; see drawLines.
 	over bool
 }
 
@@ -650,6 +651,16 @@ type chartBounds struct {
 // timeChart draws series as braille lines on shared axes. yFmt may be nil for plain integers.
 // The axes cover b and all the data, so every repo shares one span.
 func timeChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds) string {
+	return lineChart(ss, w, h, yFmt, b, drawLines)
+}
+
+// blockChart is timeChart drawn in half blocks; see blockLines.
+func blockChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds) string {
+	return lineChart(ss, w, h, yFmt, b, blockLines)
+}
+
+// lineChart sets up a timeChart's axes and has draw draw the lines on them.
+func lineChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds, draw func(*timeserieslinechart.Model, []series)) string {
 	var drawable []series
 	for _, s := range ss {
 		if len(s.times) > 1 {
@@ -686,15 +697,77 @@ func timeChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds) 
 		opts = append(opts, timeserieslinechart.WithYLabelFormatter(func(_ int, v float64) string { return yFmt(v) }))
 	}
 	c := timeserieslinechart.New(w, h, opts...)
-	drawLines(&c, drawable)
+	draw(&c, drawable)
 	return c.View()
 }
 
-// drawLines draws each series on c's axes as a braille line, later ones on top.
-// Like ntcharts' DrawBrailleDataSets, lines sharing a cell merge their dots in
-// the later one's color, which keeps every line unbroken. A line marked over
-// takes its cells whole instead, so it keeps its shape without the dots of the
-// lines beneath, which break where it crosses them.
+// blockLines draws each series on c's axes as a line of half blocks. Every
+// cell is two pixels, top and bottom, each with its own color, so lines that
+// pass through the same cell both show. Where two need the same pixel, a line
+// marked over gets it, else the earlier series.
+func blockLines(c *timeserieslinechart.Model, ss []series) {
+	c.Clear()
+	c.DrawXYAxisAndLabel()
+	gw, gh := c.GraphWidth(), c.GraphHeight()*2
+	owner := make([][]int, gh) // the index of the series drawn on each pixel, or -1
+	for y := range owner {
+		owner[y] = slices.Repeat([]int{-1}, gw)
+	}
+	pixel := func(t time.Time, v float64) canvas.Point {
+		x := (float64(t.Unix()) - c.ViewMinX()) / (c.ViewMaxX() - c.ViewMinX()) * float64(gw-1)
+		y := (v - c.ViewMinY()) / (c.ViewMaxY() - c.ViewMinY()) * float64(gh-1)
+		return canvas.Point{X: int(math.Round(x)), Y: gh - 1 - int(math.Round(y))}
+	}
+	for i, s := range ss {
+		var prev canvas.Point
+		for j, t := range s.times {
+			p := pixel(t, s.vals[j])
+			if j == 0 {
+				prev = p
+			}
+			for _, q := range graph.GetLinePoints(prev, p) {
+				if q.X < 0 || q.X >= gw || q.Y < 0 || q.Y >= gh {
+					continue
+				}
+				if o := owner[q.Y][q.X]; o < 0 || s.over && !ss[o].over {
+					owner[q.Y][q.X] = i
+				}
+			}
+			prev = p
+		}
+	}
+	left := 0
+	if c.YStep() > 0 {
+		left = c.Origin().X + 1
+	}
+	for y := range c.GraphHeight() {
+		for x := range gw {
+			top, bottom := owner[2*y][x], owner[2*y+1][x]
+			var r rune
+			style := lipgloss.NewStyle()
+			switch {
+			case top < 0 && bottom < 0:
+				continue
+			case top == bottom:
+				r, style = '█', style.Foreground(ss[top].color)
+			case bottom < 0:
+				r, style = '▀', style.Foreground(ss[top].color)
+			case top < 0:
+				r, style = '▄', style.Foreground(ss[bottom].color)
+			default:
+				r, style = '▀', style.Foreground(ss[top].color).Background(ss[bottom].color)
+			}
+			c.Canvas.SetCell(canvas.Point{X: left + x, Y: y}, canvas.NewCellWithStyle(r, style))
+		}
+	}
+}
+
+// drawLines draws each series on c's axes as a braille line. A cell can only
+// have one color, so where lines share one, one line gets the cell and only
+// its dots are drawn: a line marked over, else the one with more dots there
+// (so a spike keeps its foot where it crosses a flat line), else the earlier
+// series. Merging the dots, as ntcharts' DrawBrailleDataSets does, would show
+// one line's dots in another's color.
 func drawLines(c *timeserieslinechart.Model, ss []series) {
 	c.Clear()
 	c.DrawXYAxisAndLabel()
@@ -705,15 +778,16 @@ func drawLines(c *timeserieslinechart.Model, ss []series) {
 	if c.YStep() > 0 {
 		left = c.Origin().X + 1
 	}
-	for _, s := range ss {
+	patterns := make([][][]rune, len(ss))
+	for i, s := range ss {
 		g := graph.NewBrailleGrid(gw, gh, 0, float64(gw), 0, float64(gh))
 		var prev canvas.Point
-		for i, t := range s.times {
+		for j, t := range s.times {
 			p := g.GridPoint(canvas.Float64Point{
 				X: (float64(t.Unix()) - c.ViewMinX()) * xs,
-				Y: (s.vals[i] - c.ViewMinY()) * ys,
+				Y: (s.vals[j] - c.ViewMinY()) * ys,
 			})
-			if i == 0 {
+			if j == 0 {
 				prev = p
 			}
 			for _, q := range graph.GetLinePoints(prev, p) {
@@ -721,16 +795,25 @@ func drawLines(c *timeserieslinechart.Model, ss []series) {
 			}
 			prev = p
 		}
-		style := lipgloss.NewStyle().Foreground(s.color)
-		for y, row := range g.BraillePatterns() {
-			for x, r := range row {
-				switch p := (canvas.Point{X: left + x, Y: y}); {
-				case r == runes.BrailleBlockOffset:
-				case s.over:
-					c.Canvas.SetCell(p, canvas.NewCellWithStyle(r, style))
-				default:
-					graph.DrawBrailleRune(&c.Canvas, p, r, style)
+		patterns[i] = g.BraillePatterns()
+	}
+	dots := func(r rune) int { return bits.OnesCount(uint(r - runes.BrailleBlockOffset)) }
+	for y := range gh {
+		for x := range gw {
+			best := -1
+			for i, s := range ss {
+				r := patterns[i][y][x]
+				if r == runes.BrailleBlockOffset {
+					continue
 				}
+				if best < 0 || s.over && !ss[best].over ||
+					s.over == ss[best].over && dots(r) > dots(patterns[best][y][x]) {
+					best = i
+				}
+			}
+			if best >= 0 {
+				style := lipgloss.NewStyle().Foreground(ss[best].color)
+				c.Canvas.SetCell(canvas.Point{X: left + x, Y: y}, canvas.NewCellWithStyle(patterns[best][y][x], style))
 			}
 		}
 	}

@@ -87,6 +87,12 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 			s.times = append(s.times, start)
 			s.vals = append(s.vals, n)
 		}
+		// Plotted on a log scale: one burst would otherwise set the y axis
+		// and squash everyone's usual weeks into the bottom rows, where
+		// the lines run over each other.
+		for k, v := range s.vals {
+			s.vals[k] = math.Log1p(v)
+		}
 		ss = append(ss, s)
 		switch {
 		case name == hover:
@@ -102,7 +108,8 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 	if hovered != nil { // drawn last, over the others
 		drawn = append(drawn, *hovered)
 	}
-	chart := timeChart(drawn, w, m.chartH(), nil, b)
+	commits := func(v float64) string { return num(int(math.Round(math.Expm1(v)))) }
+	chart := blockChart(drawn, w, m.chartH(), commits, b)
 	if len(ss) == 0 || len(ss[0].times) < 2 {
 		return chart // says there isn't enough history
 	}

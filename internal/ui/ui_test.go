@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
 	"github.com/mynameisgump/repoanalyzer/internal/loc"
@@ -322,6 +324,151 @@ func TestOverlaidLinesKeepTheirShape(t *testing.T) {
 				t.Errorf("cell %d,%d is %c overlaid, %c on its own", x, y, got[x], r)
 			}
 		}
+	}
+}
+
+// Overlaid lines never bleed into each other: every cell of the chart shows
+// one line's dots, exactly as that line draws them on its own.
+func TestOverlaidLinesDontBleed(t *testing.T) {
+	h := sampleLocal().History
+	var ss []series
+	for i, a := range h.Authors {
+		s := series{name: a.Name, color: palette[i]}
+		for _, wk := range h.AuthorsWeekly {
+			s.times = append(s.times, wk.Start)
+			s.vals = append(s.vals, float64(wk.Commits(a.Name)))
+		}
+		ss = append(ss, s)
+	}
+	b := chartBounds{from: ss[0].times[0], to: ss[0].times[len(ss[0].times)-1], peak: 3}
+	grid := func(ss ...series) [][]rune {
+		var g [][]rune
+		for _, line := range strings.Split(ansi.Strip(timeChart(ss, 60, 8, nil, b)), "\n") {
+			g = append(g, []rune(line))
+		}
+		return g
+	}
+	both := grid(ss...)
+	var alone [][][]rune
+	for _, s := range ss {
+		alone = append(alone, grid(s))
+	}
+	shared := 0
+	for y, row := range both {
+		for x, r := range row {
+			if r < 0x2801 || r > 0x28FF {
+				continue
+			}
+			owners := 0
+			for _, a := range alone {
+				if a[y][x] >= 0x2801 && a[y][x] <= 0x28FF {
+					owners++
+				}
+			}
+			if owners > 1 {
+				shared++
+			}
+			if !slices.ContainsFunc(alone, func(a [][]rune) bool { return a[y][x] == r }) {
+				t.Errorf("cell %d,%d is %c, which no line draws there on its own", x, y, r)
+			}
+		}
+	}
+	if shared == 0 {
+		t.Fatal("no cells are shared, so this tests nothing")
+	}
+}
+
+// In half blocks, lines that pass through the same cell both show, each in
+// its own color: a line keeps every pixel it has on its own, except ones an
+// earlier line needs too.
+func TestBlockLinesShareCells(t *testing.T) {
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	start := time.Date(2025, 1, 6, 0, 0, 0, 0, time.Local)
+	line := func(c lipgloss.Color, vals ...float64) series {
+		s := series{name: string(c), color: c}
+		for i, v := range vals {
+			s.times = append(s.times, start.AddDate(0, 0, 7*i))
+			s.vals = append(s.vals, v)
+		}
+		return s
+	}
+	first := line("#ff0000", 0, 5, 1, 6, 2, 7, 3, 8)
+	second := line("#0000ff", 8, 3, 7, 2, 6, 1, 5, 0)
+	b := chartBounds{from: start, to: start.AddDate(0, 0, 49), peak: 8}
+	// pixels decodes a chart into each half cell's color, "" where empty.
+	sgr := regexp.MustCompile(`\x1b\[([0-9;]*)m|.`)
+	pixels := func(ss ...series) [][]string {
+		var out [][]string
+		for _, line := range strings.Split(blockChart(ss, 40, 8, nil, b), "\n") {
+			var top, bottom []string
+			fg, bg := "", ""
+			for _, m := range sgr.FindAllStringSubmatch(line, -1) {
+				if strings.HasPrefix(m[0], "\x1b[") {
+					n := strings.Split(m[1], ";")
+					if m[1] == "" || m[1] == "0" {
+						fg, bg = "", ""
+					}
+					for i := 0; i+4 < len(n); i++ {
+						if n[i+1] == "2" && (n[i] == "38" || n[i] == "48") {
+							c := strings.Join(n[i+2:i+5], ";")
+							if n[i] == "38" {
+								fg = c
+							} else {
+								bg = c
+							}
+							i += 4
+						}
+					}
+					continue
+				}
+				switch m[0] {
+				case "▀":
+					top, bottom = append(top, fg), append(bottom, bg)
+				case "▄":
+					top, bottom = append(top, ""), append(bottom, fg)
+				case "█":
+					top, bottom = append(top, fg), append(bottom, fg)
+				default:
+					top, bottom = append(top, ""), append(bottom, "")
+				}
+			}
+			out = append(out, top, bottom)
+		}
+		return out
+	}
+	both, alone1, alone2 := pixels(first, second), pixels(first), pixels(second)
+	red, blue := "255;0;0", "0;0;255"
+	shared := 0
+	for y := range both {
+		for x, got := range both[y] {
+			p1, p2 := alone1[y][x], alone2[y][x]
+			switch {
+			case p1 != "" && got != red:
+				t.Errorf("pixel %d,%d of the first line is %q", x, y, got)
+			case p1 == "" && p2 != "" && got != blue:
+				t.Errorf("pixel %d,%d of the second line is %q", x, y, got)
+			case p1 == "" && p2 == "" && got != "":
+				t.Errorf("pixel %d,%d is %q, but neither line has it", x, y, got)
+			}
+		}
+	}
+	// Two flat lines one pixel apart share every cell along them, one in
+	// each half, and both show.
+	top := line("#ff0000", 8, 8)
+	for v := 8.0; v > 0; v -= 0.05 {
+		below := line("#0000ff", v, v)
+		if p := pixels(below); slices.Contains(p[1], blue) {
+			for x, c := range pixels(top, below)[0] {
+				if c == red && pixels(top, below)[1][x] == blue {
+					shared++
+				}
+			}
+			break
+		}
+	}
+	if shared == 0 {
+		t.Error("two lines a pixel apart don't both show in the cells they share")
 	}
 }
 

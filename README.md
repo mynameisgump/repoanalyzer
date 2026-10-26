@@ -63,7 +63,7 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – tiles for lines of code, files, commits, last commit, lines added/deleted, contributors, repo age,
   PRs (merged, open, median size, median time to merge) and test share; languages; weekly commit sparkline
-- **Authors** – the top 5 authors' commits over time (per 2 weeks by default) and active contributors per week;
+- **Authors** – the top 5 authors' commits over time (per 2 weeks by default, on a log scale so one burst doesn't flatten everyone else) and active contributors per week;
   contributors by commits with share, lines added/removed, first/last commit, and, once `x` asks for more details,
   their email and how many of their commits were pushed without a PR
 - **Activity** – total lines over time, commits per week, the share of each month's commits
