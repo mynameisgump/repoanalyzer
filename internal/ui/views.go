@@ -314,13 +314,19 @@ func (m Model) authorsLimit() int {
 }
 
 // authorColumns picks the Authors table's columns for tables w wide. Every repo
-// gets the same ones: Share, then PRs, then Last, are dropped until the widest
-// repo's table fits. fits is false when even the fewest columns are too wide,
-// and the tables will be squeezed, wrapping names and numbers.
+// gets the same ones: First, then Share, PRs and Last, are dropped until the
+// widest repo's table fits. Email is there only once x asks for more details,
+// and then it's the last column to go. fits is false when even the fewest
+// columns are too wide, and the tables will be squeezed, wrapping names and numbers.
 func (m Model) authorColumns(w int) (headers []string, fits bool) {
-	headers = []string{"#", "Author", "Commits", "PRs", "Share", "Added", "Deleted", "Last"}
+	headers = []string{"#", "Author", "Email", "Commits", "PRs", "Share", "Added", "Deleted", "Last"}
 	if w >= 110 { // room for the share bar and the first commit's date
-		headers = []string{"#", "Author", "Commits", "PRs", "Share", "Added", "Deleted", "First", "Last"}
+		headers = []string{"#", "Author", "Email", "Commits", "PRs", "Share", "Added", "Deleted", "First", "Last"}
+	}
+	drops := []string{"", "First", "Share", "PRs", "Last", "Email"}
+	if !m.details {
+		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "Email" })
+		drops = drops[:len(drops)-1]
 	}
 	if !m.anyPRsInHistory() {
 		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "PRs" })
@@ -335,7 +341,7 @@ func (m Model) authorColumns(w int) (headers []string, fits bool) {
 		}
 		return true
 	}
-	for _, drop := range []string{"", "Share", "PRs", "Last"} {
+	for _, drop := range drops {
 		if drop != "" {
 			headers = slices.DeleteFunc(slices.Clone(headers), func(h string) bool { return h == drop })
 		}
@@ -386,6 +392,7 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 	authors := h.Authors[:n]
 	wide := slices.Contains(headers, "First")
 	nameW := min(28, max(w/4, 12))
+	emailW := min(32, max(w/5, 12))
 	topCommits := float64(authors[0].Commits)
 	prs := map[string]int{}
 	for _, p := range h.PRSizes.ByAuthor {
@@ -397,6 +404,8 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 			return fmt.Sprint(i + 1)
 		case "Author":
 			return truncate(a.Name, nameW)
+		case "Email":
+			return truncate(a.Email, emailW)
 		case "Commits":
 			return num(a.Commits)
 		case "PRs":
@@ -433,7 +442,7 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 				s = s.Align(lipgloss.Right).Foreground(green)
 			case "Deleted":
 				s = s.Align(lipgloss.Right).Foreground(red)
-			case "First", "Last":
+			case "Email", "First", "Last":
 				s = s.Foreground(subtle)
 			}
 			return s

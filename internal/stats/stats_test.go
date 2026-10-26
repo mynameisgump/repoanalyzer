@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestCompute(t *testing.T) {
 		{AuthorName: "Bob", When: day(200), Subject: "Initial",
 			Files: []gitlog.FileChange{{Path: "a.go", Added: 10}, {Path: "gone.go", Added: 3}}},
 	}
-	s := Compute(commits, now, Paths{Exists: func(p string) bool { return p != "gone.go" }})
+	s := Compute(commits, now, Paths{Exists: func(p string) bool { return p != "gone.go" }}, nil)
 
 	if s.Commits != 3 || s.Added != 18 || s.Deleted != 1 {
 		t.Errorf("totals: %+v", s)
@@ -77,7 +78,7 @@ func TestCompute(t *testing.T) {
 }
 
 func TestComputeEmpty(t *testing.T) {
-	s := Compute(nil, time.Now(), Paths{})
+	s := Compute(nil, time.Now(), Paths{}, nil)
 	if s.Commits != 0 || s.Weekly != nil || len(s.Authors) != 0 {
 		t.Errorf("empty: %+v", s)
 	}
@@ -119,7 +120,7 @@ func TestPRSizes(t *testing.T) {
 		{When: jan, AuthorName: "Bob", Subject: "Direct push, not a PR", Files: []gitlog.FileChange{{Path: "c.go", Added: 1000}}},
 	}
 	names := map[string]string{"tip": "Ada"}
-	got := PRSizes(mainline, names, func(p string) bool { return p == "go.sum" })
+	got := PRSizes(mainline, nil, names, func(p string) bool { return p == "go.sum" })
 
 	if got.PRs != 3 || got.MedianLines != 30 || got.MeanLines != 100.0/3 {
 		t.Errorf("summary = %+v", got)
@@ -143,7 +144,7 @@ func TestPRSizes(t *testing.T) {
 	if b := got.ByAuthor[1]; b.Name != "Bob" || b.PRs != 1 || b.MeanLines != 30 {
 		t.Errorf("bob = %+v", b)
 	}
-	if empty := PRSizes(nil, nil, nil); empty.PRs != 0 || empty.Monthly != nil {
+	if empty := PRSizes(nil, nil, nil, nil); empty.PRs != 0 || empty.Monthly != nil {
 		t.Errorf("empty = %+v", empty)
 	}
 }
@@ -161,7 +162,7 @@ func TestTestShares(t *testing.T) {
 	s := Compute(commits, jan, Paths{
 		IsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") },
 		Skip:   func(p string) bool { return p == "go.sum" },
-	})
+	}, nil)
 
 	if want := (TestShare{Commits: 3, TestCommits: 2, Added: 120, TestAdded: 30}); s.Tests != want {
 		t.Errorf("overall = %+v, want %+v", s.Tests, want)
@@ -198,7 +199,7 @@ func TestHotFilesKeepTests(t *testing.T) {
 			commits = append(commits, gitlog.Commit{When: now, Files: files})
 		}
 	}
-	s := Compute(commits, now, Paths{IsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") }})
+	s := Compute(commits, now, Paths{IsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") }}, nil)
 	tests := 0
 	for _, f := range s.HotFiles {
 		if f.Test {
@@ -207,5 +208,75 @@ func TestHotFilesKeepTests(t *testing.T) {
 	}
 	if len(s.HotFiles) != hotFileLimit+1 || tests != 1 {
 		t.Errorf("kept %d files, %d tests", len(s.HotFiles), tests)
+	}
+}
+
+// People are merged by name or email, transitively, and shown under the name
+// they used most; windows reuse the whole history's identities.
+func TestIdentify(t *testing.T) {
+	now := time.Now()
+	commit := func(name, email string, subject string) gitlog.Commit {
+		return gitlog.Commit{AuthorName: name, AuthorEmail: email, When: now, Subject: subject}
+	}
+	commits := []gitlog.Commit{ // newest first, like git log
+		commit("Dax", "m@y.io", ""),
+		commit("Dax", "d@x.io", ""),
+		commit("Dax Raad", "d@x.io", ""),
+		commit("Dax Raad", "d@x.io", ""),
+		commit("Dax Raad", "d@x.io", ""),
+		commit("Ada", "ada@work.com", ""),
+		commit("ada", "ada@home.net", ""),
+		commit("Bob", "", ""),
+		commit("bob", "", ""),
+		commit("Eve", "eve@x.io", ""),
+	}
+	s := Compute(commits, now, Paths{}, nil)
+	if len(s.Authors) != 4 {
+		t.Fatalf("authors = %+v", s.Authors)
+	}
+	// Dax Raad: 3 commits under that name, 2 as Dax, joined by d@x.io; m@y.io follows.
+	dax := s.Authors[0]
+	if dax.Name != "Dax Raad" || dax.Commits != 5 || dax.Email != "d@x.io" || !slices.Equal(dax.Aliases, []string{"Dax"}) {
+		t.Errorf("dax = %+v", dax)
+	}
+	// Ada and ada share no email; names still merge case-insensitively, the
+	// most recent spelling winning the tie, with no alias for a case variant.
+	ada := s.Authors[1]
+	if ada.Name != "Ada" || ada.Commits != 2 || ada.Email != "ada@work.com" || ada.Aliases != nil {
+		t.Errorf("ada = %+v", ada)
+	}
+	if bob := s.Authors[2]; bob.Name != "Bob" || bob.Commits != 2 || bob.Email != "" {
+		t.Errorf("bob = %+v (empty emails must not link people)", bob)
+	}
+	if last := s.AuthorsWeekly[len(s.AuthorsWeekly)-1]; last.Active != 4 || last.Commits("Dax Raad") != 5 {
+		t.Errorf("weekly = %+v", last)
+	}
+
+	// A window holding only "Dax" commits still names the person Dax Raad
+	// when given the whole history's identities, and not otherwise.
+	ids := Identify(commits)
+	window := commits[:2]
+	if w := Compute(window, now, Paths{}, ids); w.Authors[0].Name != "Dax Raad" || w.Authors[0].Commits != 2 {
+		t.Errorf("windowed = %+v", w.Authors)
+	}
+	if w := Compute(window, now, Paths{}, nil); w.Authors[0].Name != "Dax" {
+		t.Errorf("on its own = %+v", w.Authors)
+	}
+
+	// PR sizes credit by the same names, so the table can join on them.
+	prs := []gitlog.Commit{
+		commit("Dax", "m@y.io", "Fix (#2)"),
+		commit("ada", "ada@home.net", "Feat (#1)"),
+	}
+	by := PRSizes(prs, ids, nil, nil).ByAuthor
+	if len(by) != 2 || by[0].Name != "Ada" || by[1].Name != "Dax Raad" {
+		t.Errorf("pr authors = %+v", by)
+	}
+	if p := ids.Person(commit("Nobody", "new@x.io", "")); p.Name != "Nobody" || p.Email != "new@x.io" {
+		t.Errorf("unknown author = %+v", p)
+	}
+	var none *Identities
+	if none.Name(commit("Solo", "", "")) != "Solo" {
+		t.Error("nil identities should pass names through")
 	}
 }

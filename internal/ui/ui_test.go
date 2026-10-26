@@ -34,9 +34,9 @@ func sampleLocal() *report.Local {
 			Files:      files,
 		})
 	}
-	h := stats.Compute(commits, now, stats.Paths{IsTest: loc.IsTest})
+	h := stats.Compute(commits, now, stats.Paths{IsTest: loc.IsTest}, nil)
 	h.LinesOverTime = stats.LinesOverTime(commits, 25000, nil)
-	h.PRSizes = stats.PRSizes(commits, nil, nil)
+	h.PRSizes = stats.PRSizes(commits, nil, nil, nil)
 	return &report.Local{
 		Repo: "demo", Branch: "main",
 		LOC: loc.Result{Files: 3, Code: 100,
@@ -294,7 +294,7 @@ func TestExpandLists(t *testing.T) {
 	for i := range 12 {
 		langs = append(langs, loc.Language{Name: fmt.Sprintf("Lang%d", i), Code: 100 - i})
 	}
-	local := &report.Local{Repo: "big", Branch: "main", History: stats.Compute(commits, now, stats.Paths{}), Commits: commits,
+	local := &report.Local{Repo: "big", Branch: "main", History: stats.Compute(commits, now, stats.Paths{}, nil), Commits: commits,
 		LOC: loc.Result{Code: 1000, Languages: langs}}
 
 	var m tea.Model = New(Options{Roots: []string{"/src/big"}, NoRemote: true})
@@ -686,5 +686,48 @@ func TestPullRequestsTab(t *testing.T) {
 	key('3')
 	if strings.Contains(body(), prChart) {
 		t.Errorf("the PR size chart is still on Activity")
+	}
+}
+
+// x adds the Email column to the Authors table and takes it away again, and
+// only applies there. Once asked for, Email fits even where the table is narrow.
+func TestDetailsToggle(t *testing.T) {
+	for _, width := range []int{120, 80} {
+		var m tea.Model = New(Options{Roots: []string{"/src/demo"}, NoRemote: true})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+		m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+		key := func(r rune) { m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+		header := func() string {
+			for _, line := range m.(Model).content {
+				if strings.Contains(line, "│ # ") {
+					return line
+				}
+			}
+			return ""
+		}
+
+		key('2')
+		if h := header(); strings.Contains(h, "Email") || !strings.Contains(h, "Author") {
+			t.Errorf("width %d: email before x: %q", width, h)
+		}
+		if f := m.(Model).footer(); !strings.Contains(f, "x more details") {
+			t.Errorf("width %d: footer = %q", width, f)
+		}
+		key('x')
+		if h := header(); !strings.Contains(h, "Email") {
+			t.Errorf("width %d: no email after x: %q", width, h)
+		}
+		if f := m.(Model).footer(); !strings.Contains(f, "x fewer details") {
+			t.Errorf("width %d: footer = %q", width, f)
+		}
+		key('1')
+		if strings.Contains(m.(Model).footer(), "details") {
+			t.Errorf("x hint should only be on Authors")
+		}
+		key('2')
+		key('x')
+		if h := header(); strings.Contains(h, "Email") {
+			t.Errorf("width %d: a second x should hide email: %q", width, h)
+		}
 	}
 }

@@ -41,8 +41,8 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
-`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `e` shows every row of the current tab's lists
-(wherever you see "+ N more"; press again to show fewer), `q` quits.
+`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails to the Authors table,
+`e` shows every row of the current tab's lists (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, and clicking a column title in PR size by author sorts by it; anything clickable lights up under the pointer.
 While the dashboard has the mouse, hold Shift (Option in iTerm2) to select text, or run with `--no-mouse`.
@@ -63,7 +63,7 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – tiles for lines of code, files, commits, last commit, lines added/deleted, contributors, repo age,
   PRs (merged, open, median size, median time to merge) and test share; languages; weekly commit sparkline
-- **Authors** – contributors by commits with share, lines added/removed, first/last commit
+- **Authors** – contributors by commits with share, lines added/removed, first/last commit, and their email once `x` asks for more details
 - **Activity** – total lines over time, commits per week, the share of each month's commits
   that changed a test file, and a day × hour heatmap.
   `+`/`-` resize the line charts in 4-row steps (6 rows up to a full screen); taller charts show finer detail, not just bigger lines
@@ -98,4 +98,6 @@ squeezed), they stay stacked and the header says so.
 - `internal/remote` queries GitHub's GraphQL API through `gh api`, so it uses your existing `gh auth login`.
 - `internal/ui` is the Bubble Tea dashboard; local stats show first and PR stats fill in when they arrive.
 
-Contributors are merged by name and respect `.mailmap`; add one to a repo to merge identities further.
+Contributors who share a name or an email are merged into one person (so "Ada Lovelace" <ada@work.com> and "ada" <ada@home.net>
+are one contributor, shown under the name they used most) and `.mailmap` is respected; add one to a repo to merge or split identities further.
+`--json` lists each author's other names as `aliases`.

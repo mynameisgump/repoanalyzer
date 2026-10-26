@@ -31,7 +31,8 @@ type Local struct {
 	Commits  []gitlog.Commit `json:"-"`
 	Mainline []gitlog.Commit `json:"-"`
 	tracked  map[string]bool
-	names    map[string]string // commit hash -> author name
+	ids      *stats.Identities // who authored Commits, merged by name or email
+	names    map[string]string // commit hash -> display name
 }
 
 // CollectLocal counts lines and reads history concurrently. root must be a repo top level.
@@ -88,11 +89,13 @@ func CollectLocal(ctx context.Context, root, since string, allFiles bool) (*Loca
 	}
 	l.Repo, l.Root, l.Branch, l.Since, l.LOC = filepath.Base(root), root, branch, since, lines
 	l.Commits, l.Mainline, l.tracked = commits, mainline, tracked
+	// Identities come from the whole history so a person keeps one name in
+	// every time window. names lets PR sizes credit a merge commit to whoever
+	// wrote the PR branch, even when the branch started before a window does.
+	l.ids = stats.Identify(commits)
 	l.names = make(map[string]string, len(commits))
-	// Lets PR sizes credit a merge commit to whoever wrote the PR branch, even
-	// when the branch started before a time window does.
 	for _, c := range commits {
-		l.names[c.Hash] = c.AuthorName
+		l.names[c.Hash] = l.ids.Name(c)
 	}
 	l.History = l.compute(commits, mainline, time.Now())
 	// Diffs count blank lines too, so anchor on total lines rather than code lines.
@@ -113,8 +116,8 @@ func (l *Local) compute(commits, mainline []gitlog.Commit, now time.Time) stats.
 	if l.tracked != nil {
 		paths.Exists = func(p string) bool { return l.tracked[p] }
 	}
-	s := stats.Compute(commits, now, paths)
-	s.PRSizes = stats.PRSizes(mainline, l.names, l.Skip)
+	s := stats.Compute(commits, now, paths, l.ids)
+	s.PRSizes = stats.PRSizes(mainline, l.ids, l.names, l.Skip)
 	return s
 }
 

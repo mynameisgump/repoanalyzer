@@ -11,9 +11,12 @@ import (
 	"github.com/mynameisgump/repoanalyzer/internal/gitlog"
 )
 
+// Author is one contributor; see Identities for how commits are merged into one.
 type Author struct {
-	Name    string    `json:"name"`
-	Email   string    `json:"email"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	// Aliases are other names the author committed under, most used first.
+	Aliases []string  `json:"aliases,omitempty"`
 	Commits int       `json:"commits"`
 	Added   int       `json:"added"`
 	Deleted int       `json:"deleted"`
@@ -160,9 +163,14 @@ func prNumber(subject string) string {
 	return ""
 }
 
-// Compute aggregates commits.
-func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
+// Compute aggregates commits. ids says who authored them; nil works them out
+// from commits alone, but callers recomputing a window should pass the
+// identities of the whole history so a person keeps one name in every window.
+func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identities) Summary {
 	var s Summary
+	if ids == nil {
+		ids = Identify(commits)
+	}
 	authors := map[string]*Author{}
 	files := map[string]*File{}
 	months := map[time.Time]*TestShare{}
@@ -179,11 +187,11 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 			s.Last = c.When
 		}
 
-		// Key on the (mailmapped) name: people often commit from several emails.
-		key := strings.ToLower(c.AuthorName)
+		p := ids.Person(c)
+		key := strings.ToLower(p.Name)
 		a := authors[key]
 		if a == nil {
-			a = &Author{Name: c.AuthorName, Email: c.AuthorEmail, First: c.When, Last: c.When}
+			a = &Author{Name: p.Name, Email: p.Email, Aliases: p.Aliases, First: c.When, Last: c.When}
 			authors[key] = a
 		}
 		a.Commits++
@@ -283,22 +291,22 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 
 	if len(commits) > 0 {
 		s.Weekly = Weekly(commits, s.First, s.Last)
-		s.AuthorsWeekly = authorsWeekly(commits, authors, s.First, s.Last)
+		s.AuthorsWeekly = authorsWeekly(commits, authors, ids, s.First, s.Last)
 	}
 	return s
 }
 
 // authorsWeekly counts each author's commits per Monday-start week, zero-filled
-// from first's week through last's. authors maps lowercased names to their
-// Author, so every week uses the same display name.
-func authorsWeekly(commits []gitlog.Commit, authors map[string]*Author, first, last time.Time) []WeeklyAuthors {
+// from first's week through last's. authors maps lowercased display names (as
+// ids gives them) to their Author, so every week uses the same name.
+func authorsWeekly(commits []gitlog.Commit, authors map[string]*Author, ids *Identities, first, last time.Time) []WeeklyAuthors {
 	counts := map[time.Time]map[string]int{}
 	for _, c := range commits {
 		wk := weekStart(c.When)
 		if counts[wk] == nil {
 			counts[wk] = map[string]int{}
 		}
-		counts[wk][strings.ToLower(c.AuthorName)]++
+		counts[wk][strings.ToLower(ids.Name(c))]++
 	}
 	var out []WeeklyAuthors
 	end := weekStart(last)
@@ -383,9 +391,13 @@ func LinesOverTime(mainline []gitlog.Commit, current int, skip func(string) bool
 //
 // A squash commit is authored by the PR's author, but a merge commit by whoever
 // merged it, so merges are credited to the author of the PR branch's tip (the
-// second parent), looked up in names (hash -> author name). Merges whose tip
-// isn't in names fall back to the merge commit's author; names may be nil.
-func PRSizes(mainline []gitlog.Commit, names map[string]string, skip func(string) bool) PRSizeStats {
+// second parent), looked up in names (hash -> display name). Merges whose tip
+// isn't in names fall back to the merge commit's author, as ids names them;
+// names and ids may be nil (see Compute).
+func PRSizes(mainline []gitlog.Commit, ids *Identities, names map[string]string, skip func(string) bool) PRSizeStats {
+	if ids == nil {
+		ids = Identify(mainline)
+	}
 	type acc struct{ prs, lines int }
 	months := map[time.Time]*acc{}
 	var sizes []int
@@ -415,7 +427,7 @@ func PRSizes(mainline []gitlog.Commit, names map[string]string, skip func(string
 		a.prs++
 		a.lines += lines
 
-		name := c.AuthorName
+		name := ids.Name(c)
 		if len(c.Parents) > 1 && names[c.Parents[1]] != "" {
 			name = names[c.Parents[1]]
 		}

@@ -75,6 +75,7 @@ type Model struct {
 	expanded      uint8      // bit per tab: e shows every row of that tab's lists
 	prSort        prSortKey  // which column orders PR size by author; s cycles it
 	fileFilter    fileFilter // test / non-test filter on Files; f cycles it
+	details       bool       // x adds the Email column to the Authors table
 	sideBySide    bool       // when comparing, c puts repos in columns instead of stacking them
 	// content is the rendered body, split into lines. Rendering a tab can take
 	// milliseconds (Activity draws several charts), so it's redone only when
@@ -222,6 +223,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			if m.tab == filesTab {
 				m.fileFilter = (m.fileFilter + 1) % fileFilters
+				rerender = true
+			}
+		case "x":
+			if m.tab == authorsTab {
+				m.details = !m.details
 				rerender = true
 			}
 		case "t":
@@ -492,6 +498,13 @@ func (m Model) footerLayout() (string, []hotspot) {
 	}
 	if m.tab == filesTab {
 		keys = append(keys, hint{"f test filter", "f"})
+	}
+	if m.tab == authorsTab {
+		if m.details {
+			keys = append(keys, hint{"x fewer details", "x"})
+		} else {
+			keys = append(keys, hint{"x more details", "x"})
+		}
 	}
 	switch {
 	case !m.expandable():
