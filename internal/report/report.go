@@ -33,6 +33,7 @@ type Local struct {
 	tracked  map[string]bool
 	ids      *stats.Identities // who authored Commits, merged by name or email
 	names    map[string]string // commit hash -> display name
+	viaPR    map[string]bool   // commits that landed through a PR, by hash
 }
 
 // CollectLocal counts lines and reads history concurrently. root must be a repo top level.
@@ -97,6 +98,7 @@ func CollectLocal(ctx context.Context, root, since string, allFiles bool) (*Loca
 	for _, c := range commits {
 		l.names[c.Hash] = l.ids.Name(c)
 	}
+	l.viaPR = stats.ViaPR(commits, mainline)
 	l.History = l.compute(commits, mainline, time.Now())
 	// Diffs count blank lines too, so anchor on total lines rather than code lines.
 	l.History.LinesOverTime = stats.LinesOverTime(mainline, lines.Lines, l.Skip)
@@ -118,6 +120,7 @@ func (l *Local) compute(commits, mainline []gitlog.Commit, now time.Time) stats.
 	}
 	s := stats.Compute(commits, now, paths, l.ids)
 	s.PRSizes = stats.PRSizes(mainline, l.ids, l.names, l.Skip)
+	s.Landings = stats.Landings(commits, l.viaPR, l.ids)
 	return s
 }
 

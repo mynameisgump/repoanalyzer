@@ -41,7 +41,7 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
-`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails to the Authors table,
+`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails and direct-push counts to the Authors table,
 `e` shows every row of the current tab's lists (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, and clicking a column title in PR size by author sorts by it; anything clickable lights up under the pointer.
@@ -63,16 +63,18 @@ stats are recomputed from the history already loaded.
 
 - **Overview** – tiles for lines of code, files, commits, last commit, lines added/deleted, contributors, repo age,
   PRs (merged, open, median size, median time to merge) and test share; languages; weekly commit sparkline
-- **Authors** – contributors by commits with share, lines added/removed, first/last commit, and their email once `x` asks for more details
+- **Authors** – contributors by commits with share, lines added/removed, first/last commit, and, once `x` asks for more details,
+  their email and how many of their commits were pushed without a PR
 - **Activity** – total lines over time, commits per week, the share of each month's commits
   that changed a test file, and a day × hour heatmap.
   `+`/`-` resize the line charts in 4-row steps (6 rows up to a full screen); taller charts show finer detail, not just bigger lines
 - **Files** – most frequently changed files and the largest files, with test files tagged. `f` cycles all files →
   non-test files → test files only
 - **Pull Requests** – open/merged/closed counts and median time to merge (via `gh`); PRs found in history with their
-  mean and median size; average PR size per month (resizable like Activity's charts); PR size (lines changed) by
-  author, sorted with `s` or by clicking a column title; top PR authors (via `gh`). Everything but the `gh` figures
-  works offline
+  mean and median size; the share of commits that came through a PR and the number pushed outside one; average PR size
+  per month and the share of each month's commits that came through a PR (resizable like Activity's charts); PR size
+  (lines changed) by author, sorted with `s` or by clicking a column title; top PR authors (via `gh`). Everything but
+  the `gh` figures works offline
 
 ## Comparing repos
 
@@ -88,6 +90,8 @@ squeezed), they stay stacked and the header says so.
   Lines over time uses a second `--first-parent` pass so changes are dated by when they landed on the branch, then walks backwards from today's count.
   The same pass gives PR sizes: a PR merge commit's first-parent diff (or a squash commit's diff) is the whole PR.
   Squash commits are credited to their author; merge commits to the author of the PR branch's last commit, since the merge itself is authored by whoever clicked merge.
+  A commit came through a PR when it is a squash commit, a PR merge, or one of the commits that merge brought in from the PR branch;
+  every other commit was pushed outside a PR. PRs merged by rebasing leave no marker in history, so their commits look like direct pushes.
 - `internal/loc` counts lines in `git ls-files` in parallel, skipping binaries, lockfiles and files >4MB.
   Unless `--all-files` is given, files that aren't in a programming language (data, config, docs, assets like Godot
   `.tscn`/`.tres`, and unrecognized extensions) are left out of every stat: line counts, languages, file lists,

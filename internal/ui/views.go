@@ -315,21 +315,22 @@ func (m Model) authorsLimit() int {
 
 // authorColumns picks the Authors table's columns for tables w wide. Every repo
 // gets the same ones: First, then Share, PRs and Last, are dropped until the
-// widest repo's table fits. Email is there only once x asks for more details,
-// and then it's the last column to go. fits is false when even the fewest
-// columns are too wide, and the tables will be squeezed, wrapping names and numbers.
+// widest repo's table fits. Direct (commits that didn't come through a PR) and
+// Email are there only once x asks for more details, and then they're the last
+// columns to go. fits is false when even the fewest columns are too wide, and
+// the tables will be squeezed, wrapping names and numbers.
 func (m Model) authorColumns(w int) (headers []string, fits bool) {
-	headers = []string{"#", "Author", "Email", "Commits", "PRs", "Share", "Added", "Deleted", "Last"}
+	headers = []string{"#", "Author", "Email", "Commits", "PRs", "Direct", "Share", "Added", "Deleted", "Last"}
 	if w >= 110 { // room for the share bar and the first commit's date
-		headers = []string{"#", "Author", "Email", "Commits", "PRs", "Share", "Added", "Deleted", "First", "Last"}
+		headers = []string{"#", "Author", "Email", "Commits", "PRs", "Direct", "Share", "Added", "Deleted", "First", "Last"}
 	}
-	drops := []string{"", "First", "Share", "PRs", "Last", "Email"}
+	drops := []string{"", "First", "Share", "PRs", "Last", "Direct", "Email"}
 	if !m.details {
-		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "Email" })
-		drops = drops[:len(drops)-1]
+		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "Email" || h == "Direct" })
+		drops = drops[:len(drops)-2]
 	}
 	if !m.anyPRsInHistory() {
-		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "PRs" })
+		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "PRs" || h == "Direct" })
 	}
 	limit, all := m.authorsLimit(), m.showAll()
 	fit := func(headers []string) bool {
@@ -394,9 +395,12 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 	nameW := min(28, max(w/4, 12))
 	emailW := min(32, max(w/5, 12))
 	topCommits := float64(authors[0].Commits)
-	prs := map[string]int{}
+	prs, direct := map[string]int{}, map[string]int{}
 	for _, p := range h.PRSizes.ByAuthor {
 		prs[strings.ToLower(p.Name)] = p.PRs
+	}
+	for _, l := range h.Landings.ByAuthor {
+		direct[strings.ToLower(l.Name)] = l.Direct()
 	}
 	cell := func(i int, a stats.Author, col string) string {
 		switch col {
@@ -410,6 +414,8 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 			return num(a.Commits)
 		case "PRs":
 			return num(prs[strings.ToLower(a.Name)])
+		case "Direct":
+			return num(direct[strings.ToLower(a.Name)])
 		case "Share":
 			if wide {
 				return hbar(float64(a.Commits), topCommits, 10) + " " + pct(a.Commits, h.Commits)
@@ -436,7 +442,7 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 			switch headers[col] {
 			case "#":
 				s = s.Align(lipgloss.Right).Foreground(subtle)
-			case "Commits", "PRs":
+			case "Commits", "PRs", "Direct":
 				s = s.Align(lipgloss.Right)
 			case "Added":
 				s = s.Align(lipgloss.Right).Foreground(green)
@@ -852,10 +858,36 @@ func (m Model) pullRequests(w int) string {
 			b.peak = math.Max(b.peak, mo.AvgLines)
 		}
 	}
-	return m.each(w, func(r *repoState, w int) []string { return m.pullRequestsRepo(r, w, widths, b) })
+	// The share chart runs 0–100% over the window, or over every repo's months.
+	share := chartBounds{from: from, to: to, peak: 100}
+	for i := range m.repos {
+		r := &m.repos[i]
+		if r.local == nil || r.localErr != nil {
+			continue
+		}
+		for _, mo := range r.hist.Landings.Monthly {
+			if share.from.IsZero() || mo.Start.Before(share.from) {
+				share.from = mo.Start
+			}
+			if share.to.IsZero() || mo.Start.After(share.to) {
+				share.to = mo.Start
+			}
+		}
+	}
+	return m.each(w, func(r *repoState, w int) []string { return m.pullRequestsRepo(r, w, widths, b, share) })
 }
 
-func (m Model) pullRequestsRepo(r *repoState, w int, widths []int, b chartBounds) []string {
+// landingsChart plots the share of each month's commits that came through a PR.
+func landingsChart(r *repoState, w, height int, b chartBounds) string {
+	s := series{name: r.name, color: r.color}
+	for _, mo := range r.hist.Landings.Monthly {
+		s.times = append(s.times, mo.Start)
+		s.vals = append(s.vals, 100*float64(mo.ViaPR)/float64(mo.Commits))
+	}
+	return timeChart([]series{s}, w, height, percent, b)
+}
+
+func (m Model) pullRequestsRepo(r *repoState, w int, widths []int, b, share chartBounds) []string {
 	var status string
 	switch {
 	case m.opts.NoRemote:
@@ -886,9 +918,14 @@ func (m Model) pullRequestsRepo(r *repoState, w int, widths []int, b chartBounds
 	if len(h.PRSizes.ByAuthor) > 0 {
 		byAuthor = prSizesByAuthor(h.PRSizes, w, 10, m.showAll(), m.prSort)
 	}
+	landings := dimStyle.Render("No merged PRs found in this branch's history.")
+	if h.PRSizes.PRs > 0 && len(h.Landings.Monthly) > 0 {
+		landings = landingsChart(r, w, m.chartH(), share)
+	}
 	sections := []string{
 		top,
-		section(prChart+" (lines changed)") + "\n" + chart,
+		section(prCharts[0]+" (lines changed)") + "\n" + chart,
+		section(prCharts[1]+" (% of commits)") + "\n" + landings,
 		section("PR size by author (lines changed per PR)") + "\n" + byAuthor,
 	}
 
@@ -919,15 +956,23 @@ func (m Model) prFigures(r *repoState) []figure {
 			})},
 		)
 	}
-	ps := r.hist.PRSizes
-	mean, median := "—", "—"
+	ps, l := r.hist.PRSizes, r.hist.Landings
+	mean, median, viaPR, direct := "—", "—", "—", "—"
 	if ps.PRs > 0 {
 		mean = num(int(math.Round(ps.MeanLines))) + " lines"
 		median = num(ps.MedianLines) + " lines"
+	}
+	// Without a single PR marker every commit looks direct, which says more
+	// about how PRs are merged than about pushes; see LandingStats.
+	if ps.PRs > 0 && l.Commits > 0 {
+		viaPR = pct(l.ViaPR, l.Commits)
+		direct = num(l.Direct())
 	}
 	return append(figures,
 		figure{"PRs in history", "~" + num(r.hist.PRsInHistory)},
 		figure{"Mean PR size", mean},
 		figure{"Median PR size", median},
+		figure{"Commits via PR", viaPR},
+		figure{"Commits outside PRs", direct},
 	)
 }

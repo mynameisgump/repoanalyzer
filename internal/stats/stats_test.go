@@ -280,3 +280,59 @@ func TestIdentify(t *testing.T) {
 		t.Error("nil identities should pass names through")
 	}
 }
+
+// Commits landed via a PR when they are a squash commit, a PR merge, or were
+// brought in by one from the PR branch; commits a plain merge brought in, and
+// commits straight onto the branch, were pushed directly.
+func TestLandings(t *testing.T) {
+	jan := time.Date(2026, 1, 10, 12, 0, 0, 0, time.Local)
+	feb := time.Date(2026, 2, 3, 12, 0, 0, 0, time.Local)
+	c := func(hash, author, subject string, when time.Time, parents ...string) gitlog.Commit {
+		return gitlog.Commit{Hash: hash, AuthorName: author, Subject: subject, When: when, Parents: parents}
+	}
+	// main: m1 <- m2 (squash #1) <- m3 (merge #2 of b1..b2) <- m4 (plain merge of h1)
+	// b1 <- b2 branch off m1 and merge main back in at b2; h1 branches off m3.
+	mainline := []gitlog.Commit{
+		c("m4", "Ada", "Merge branch 'hotfix'", feb, "m3", "h1"),
+		c("m3", "Merger", "Merge pull request #2 from x/y", feb, "m2", "b2"),
+		c("m2", "Bob", "Squash it (#1)", jan, "m1"),
+		c("m1", "Ada", "Initial", jan),
+	}
+	branches := []gitlog.Commit{
+		c("h1", "Ada", "Hotfix", feb, "m3"),
+		c("b2", "Bob", "Merge main into feature", feb, "b1", "m2"),
+		c("b1", "Bob", "Feature", jan, "m1"),
+	}
+	commits := append(slices.Clone(mainline), branches...)
+	via := ViaPR(commits, mainline)
+	for hash, want := range map[string]bool{"m1": false, "m2": true, "m3": true, "m4": false, "h1": false, "b1": true, "b2": true} {
+		if via[hash] != want {
+			t.Errorf("%s via PR = %v, want %v", hash, via[hash], want)
+		}
+	}
+
+	l := Landings(commits, via, nil)
+	if l.Commits != 7 || l.ViaPR != 4 || l.Direct() != 3 {
+		t.Errorf("landings = %+v", l)
+	}
+	if len(l.Monthly) != 2 || l.Monthly[0].Commits != 3 || l.Monthly[0].ViaPR != 2 || l.Monthly[1].Commits != 4 || l.Monthly[1].ViaPR != 2 {
+		t.Errorf("monthly = %+v", l.Monthly)
+	}
+	if len(l.ByAuthor) != 3 || l.ByAuthor[0].Name != "Ada" || l.ByAuthor[0].Direct() != 3 || l.ByAuthor[0].ViaPR != 0 ||
+		l.ByAuthor[1].Name != "Bob" || l.ByAuthor[1].ViaPR != 3 || l.ByAuthor[2].Name != "Merger" || l.ByAuthor[2].ViaPR != 1 {
+		t.Errorf("by author = %+v", l.ByAuthor)
+	}
+
+	// A window with the branch commits but not their merge still knows how they landed.
+	if w := Landings(branches, via, nil); w.Commits != 3 || w.ViaPR != 2 {
+		t.Errorf("windowed = %+v", w)
+	}
+	// Without a classification everything is a direct push.
+	if d := Landings(commits, nil, nil); d.ViaPR != 0 || d.Direct() != 7 {
+		t.Errorf("unclassified = %+v", d)
+	}
+	// History cut by --since: the merge is there but the branch isn't.
+	if cut := ViaPR(mainline, mainline); !cut["m3"] || cut["b2"] {
+		t.Errorf("cut = %v", cut)
+	}
+}

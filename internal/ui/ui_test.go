@@ -37,6 +37,7 @@ func sampleLocal() *report.Local {
 	h := stats.Compute(commits, now, stats.Paths{IsTest: loc.IsTest}, nil)
 	h.LinesOverTime = stats.LinesOverTime(commits, 25000, nil)
 	h.PRSizes = stats.PRSizes(commits, nil, nil, nil)
+	h.Landings = stats.Landings(commits, stats.ViaPR(commits, commits), nil)
 	return &report.Local{
 		Repo: "demo", Branch: "main",
 		LOC: loc.Result{Files: 3, Code: 100,
@@ -662,7 +663,8 @@ func TestPullRequestsTab(t *testing.T) {
 	footer := func() string { return ansi.Strip(m.(Model).footer()) }
 
 	key('5')
-	for _, want := range []string{"PRs in history", "Mean PR size", "Median PR size", prChart + " (lines changed)", "PR size by author"} {
+	for _, want := range []string{"PRs in history", "Mean PR size", "Median PR size", "Commits via PR", "Commits outside PRs",
+		prCharts[0] + " (lines changed)", prCharts[1] + " (% of commits)", "PR size by author"} {
 		if !strings.Contains(body(), want) {
 			t.Errorf("Pull Requests is missing %q", want)
 		}
@@ -675,8 +677,8 @@ func TestPullRequestsTab(t *testing.T) {
 	}
 	before := strings.Count(body(), "\n")
 	key('+')
-	if got := strings.Count(body(), "\n") - before; got != chartStep {
-		t.Errorf("+ grew Pull Requests by %d lines, want %d", got, chartStep)
+	if got := strings.Count(body(), "\n") - before; got != 2*chartStep {
+		t.Errorf("+ grew Pull Requests by %d lines, want %d for its two charts", got, 2*chartStep)
 	}
 
 	key('2')
@@ -684,8 +686,8 @@ func TestPullRequestsTab(t *testing.T) {
 		t.Errorf("PR size by author is still on Authors")
 	}
 	key('3')
-	if strings.Contains(body(), prChart) {
-		t.Errorf("the PR size chart is still on Activity")
+	if strings.Contains(body(), prCharts[0]) || strings.Contains(body(), prCharts[1]) {
+		t.Errorf("a Pull Requests chart is still on Activity")
 	}
 }
 
@@ -707,15 +709,15 @@ func TestDetailsToggle(t *testing.T) {
 		}
 
 		key('2')
-		if h := header(); strings.Contains(h, "Email") || !strings.Contains(h, "Author") {
-			t.Errorf("width %d: email before x: %q", width, h)
+		if h := header(); strings.Contains(h, "Email") || strings.Contains(h, "Direct") || !strings.Contains(h, "Author") {
+			t.Errorf("width %d: email or direct before x: %q", width, h)
 		}
 		if f := m.(Model).footer(); !strings.Contains(f, "x more details") {
 			t.Errorf("width %d: footer = %q", width, f)
 		}
 		key('x')
-		if h := header(); !strings.Contains(h, "Email") {
-			t.Errorf("width %d: no email after x: %q", width, h)
+		if h := header(); !strings.Contains(h, "Email") || !strings.Contains(h, "Direct") {
+			t.Errorf("width %d: no email and direct after x: %q", width, h)
 		}
 		if f := m.(Model).footer(); !strings.Contains(f, "x fewer details") {
 			t.Errorf("width %d: footer = %q", width, f)

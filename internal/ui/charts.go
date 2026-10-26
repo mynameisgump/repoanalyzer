@@ -13,13 +13,13 @@ const (
 	chartStep     = 4
 )
 
-// Activity's and Authors' line charts in page order, and the one on Pull
-// Requests; resizeCharts finds them by title.
+// Activity's, Authors' and Pull Requests' line charts in page order;
+// resizeCharts finds them by title.
 var (
 	activityCharts = []string{"Total lines over time", "Commits per week", "Commits touching tests per month"}
 	authorCharts   = []string{"Commits per week by author", "Active contributors per week"}
-	prChart        = "Average PR size per month"
-	chartTitles    = slices.Concat(activityCharts, authorCharts, []string{prChart})
+	prCharts       = []string{"Average PR size per month", "Commits via PR per month"}
+	chartTitles    = slices.Concat(activityCharts, authorCharts, prCharts)
 )
 
 // hasCharts reports whether the current tab has line charts that + and - resize.

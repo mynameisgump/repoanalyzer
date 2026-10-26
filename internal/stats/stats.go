@@ -111,7 +111,9 @@ type Summary struct {
 	PRsInHistory int `json:"prs_in_history"`
 	// PRSizes is filled in separately from mainline history; see PRSizes.
 	PRSizes PRSizeStats `json:"pr_sizes"`
-	Tests   TestShare   `json:"tests"`
+	// Landings is filled in separately too; see Landings and ViaPR.
+	Landings LandingStats `json:"landings"`
+	Tests    TestShare    `json:"tests"`
 	// TestsMonthly is Tests per month, only for months with commits that changed files.
 	TestsMonthly []MonthlyTests `json:"tests_monthly"`
 }
