@@ -13,17 +13,18 @@ const (
 	chartStep     = 4
 )
 
-// Activity's line charts in page order, and the one on Pull Requests;
-// resizeCharts finds them by title.
+// Activity's and Authors' line charts in page order, and the one on Pull
+// Requests; resizeCharts finds them by title.
 var (
 	activityCharts = []string{"Total lines over time", "Commits per week", "Commits touching tests per month"}
+	authorCharts   = []string{"Commits per week by author", "Active contributors per week"}
 	prChart        = "Average PR size per month"
-	chartTitles    = append(slices.Clone(activityCharts), prChart)
+	chartTitles    = slices.Concat(activityCharts, authorCharts, []string{prChart})
 )
 
 // hasCharts reports whether the current tab has line charts that + and - resize.
 func (m Model) hasCharts() bool {
-	return m.tab == activityTab || m.tab == prTab
+	return m.tab == authorsTab || m.tab == activityTab || m.tab == prTab
 }
 
 func (m Model) chartH() int {
@@ -68,10 +69,16 @@ func chartStarts(lines []string) []int {
 		starts[i] = -1
 	}
 	for n, line := range lines {
+		// A line is the longest title it contains: "Commits per week by author"
+		// isn't the Activity chart "Commits per week".
+		best := -1
 		for i, title := range chartTitles {
-			if starts[i] < 0 && strings.Contains(line, title) {
-				starts[i] = n
+			if strings.Contains(line, title) && (best < 0 || len(title) > len(chartTitles[best])) {
+				best = i
 			}
+		}
+		if best >= 0 && starts[best] < 0 {
+			starts[best] = n
 		}
 	}
 	return starts

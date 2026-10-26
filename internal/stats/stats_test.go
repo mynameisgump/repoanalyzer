@@ -53,6 +53,27 @@ func TestCompute(t *testing.T) {
 	if total != 3 || len(s.Weekly) < 28 {
 		t.Errorf("weekly: %d buckets, %d commits", len(s.Weekly), total)
 	}
+
+	// Weeks run contiguously from Bob's commit to Ada's, zero-filled between,
+	// and line up with Weekly.
+	weeks := s.AuthorsWeekly
+	if len(weeks) != len(s.Weekly) {
+		t.Fatalf("weeks = %d, want %d like Weekly", len(weeks), len(s.Weekly))
+	}
+	for i, wk := range weeks {
+		if !wk.Start.Equal(s.Weekly[i].Start) {
+			t.Errorf("week %d starts %v, Weekly says %v", i, wk.Start, s.Weekly[i].Start)
+		}
+	}
+	if first := weeks[0]; first.Active != 1 || first.Commits("Bob") != 1 {
+		t.Errorf("first week = %+v", first)
+	}
+	if last := weeks[len(weeks)-1]; last.Active != 1 || last.Commits("Ada") != 1 || last.Commits("ada") != 0 {
+		t.Errorf("last week should credit Ada by her display name: %+v", last)
+	}
+	if quiet := weeks[5]; quiet.Active != 0 || quiet.ByAuthor != nil {
+		t.Errorf("quiet week = %+v", quiet)
+	}
 }
 
 func TestComputeEmpty(t *testing.T) {

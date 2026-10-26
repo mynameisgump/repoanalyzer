@@ -190,6 +190,8 @@ func weeklySparkline(weeks []stats.Bucket, w int, color lipgloss.TerminalColor) 
 	return sl.View() + "\n" + dimStyle.Render(from+strings.Repeat(" ", gap)+to)
 }
 
+// authors is each repo's contributor tiles, commits per week by its top
+// authors, active contributors per week, and the contributors table.
 func (m Model) authors(w int) string {
 	limit, windowed, all := m.authorsLimit(), m.windowed(), m.showAll()
 	colW := w
@@ -197,9 +199,110 @@ func (m Model) authors(w int) string {
 		colW = m.columnWidth()
 	}
 	headers, _ := m.authorColumns(colW)
+	widths := m.tileWidths(m.authorFigures)
+	// Every repo's charts share the same axes, so side by side they can be read
+	// against each other. Each repo's top authors have their own scale.
+	from, to, _, _ := m.span()
+	byAuthor := chartBounds{from: from, to: to}
+	active := byAuthor
+	for i := range m.repos {
+		r := &m.repos[i]
+		if r.local == nil || r.localErr != nil {
+			continue
+		}
+		for _, wk := range r.hist.AuthorsWeekly {
+			active.peak = math.Max(active.peak, float64(wk.Active))
+		}
+	}
 	return m.each(w, func(r *repoState, w int) []string {
-		return authorsRepo(r, w, limit, windowed, all, headers)
+		return m.authorsRepo(r, w, limit, windowed, all, headers, widths, byAuthor, active)
 	})
+}
+
+// topAuthorsCharted is how many authors the commits-per-week chart overlays.
+const topAuthorsCharted = 5
+
+// authorFigures are a repo's tiles on Authors. Every repo gets the same ones
+// in the same order, so side by side they line up.
+func (m Model) authorFigures(r *repoState) []figure {
+	h := r.hist
+	// Walk authors most-commits-first until they cover half the commits.
+	single, half, covered := 0, 0, 0
+	for _, a := range h.Authors {
+		if a.Commits == 1 {
+			single++
+		}
+		if covered*2 < h.Commits {
+			half++
+			covered += a.Commits
+		}
+	}
+	// New contributors are counted from all-time history, like Active (90d)
+	// they describe a fixed recent period rather than the window.
+	_, to, ok, _ := m.span()
+	if !ok {
+		to = time.Now()
+	}
+	newAuthors := 0
+	for _, a := range r.local.History.Authors {
+		if a.First.After(to.AddDate(-1, 0, 0)) && !a.First.After(to) {
+			newAuthors++
+		}
+	}
+	top, busFactor := "—", "—"
+	if len(h.Authors) > 0 {
+		top = pct(h.Authors[0].Commits, h.Commits)
+		busFactor = num(half)
+	}
+	return []figure{
+		{"Contributors", num(len(h.Authors))},
+		{"Active (90d)", num(h.ActiveAuthors90d)},
+		{"New (1y)", num(newAuthors)},
+		{"Single-commit authors", num(single)},
+		{"Authors for 50% of commits", busFactor},
+		{"Top author share", top},
+	}
+}
+
+// commitsByAuthorChart overlays the top authors' commits per week, one color each.
+func commitsByAuthorChart(h stats.Summary, w, height int, b chartBounds) string {
+	var ss []series
+	for i, a := range h.Authors[:min(len(h.Authors), topAuthorsCharted)] {
+		s := series{name: a.Name, color: palette[i%len(palette)]}
+		for _, wk := range h.AuthorsWeekly {
+			s.times = append(s.times, wk.Start)
+			s.vals = append(s.vals, float64(wk.Commits(a.Name)))
+		}
+		ss = append(ss, s)
+	}
+	chart := timeChart(ss, w, height, nil, b)
+	if len(h.AuthorsWeekly) < 2 {
+		return chart // says there isn't enough history
+	}
+	return legendRows(ss, w) + "\n" + chart
+}
+
+// legendRows is legend wrapped to w columns, breaking only between entries.
+func legendRows(ss []series, w int) string {
+	var entries []string
+	for i, s := range ss {
+		entry := lipgloss.NewStyle().Foreground(s.color).Render("━━ " + s.name)
+		if i < len(ss)-1 {
+			entry += "   "
+		}
+		entries = append(entries, entry)
+	}
+	return flow(entries, w)
+}
+
+// activeAuthorsChart plots how many authors committed each week.
+func activeAuthorsChart(r *repoState, w, height int, b chartBounds) string {
+	s := series{name: r.name, color: r.color}
+	for _, wk := range r.hist.AuthorsWeekly {
+		s.times = append(s.times, wk.Start)
+		s.vals = append(s.vals, float64(wk.Active))
+	}
+	return timeChart([]series{s}, w, height, nil, b)
 }
 
 // authorsLimit is how many authors the table shows before e expands it.
@@ -211,13 +314,16 @@ func (m Model) authorsLimit() int {
 }
 
 // authorColumns picks the Authors table's columns for tables w wide. Every repo
-// gets the same ones: Share, then Last, are dropped until the widest repo's table
-// fits. fits is false when even the fewest columns are too wide, and the
-// tables will be squeezed, wrapping names and numbers.
+// gets the same ones: Share, then PRs, then Last, are dropped until the widest
+// repo's table fits. fits is false when even the fewest columns are too wide,
+// and the tables will be squeezed, wrapping names and numbers.
 func (m Model) authorColumns(w int) (headers []string, fits bool) {
-	headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "Last"}
+	headers = []string{"#", "Author", "Commits", "PRs", "Share", "Added", "Deleted", "Last"}
 	if w >= 110 { // room for the share bar and the first commit's date
-		headers = []string{"#", "Author", "Commits", "Share", "Added", "Deleted", "First", "Last"}
+		headers = []string{"#", "Author", "Commits", "PRs", "Share", "Added", "Deleted", "First", "Last"}
+	}
+	if !m.anyPRsInHistory() {
+		headers = slices.DeleteFunc(headers, func(h string) bool { return h == "PRs" })
 	}
 	limit, all := m.authorsLimit(), m.showAll()
 	fit := func(headers []string) bool {
@@ -229,7 +335,7 @@ func (m Model) authorColumns(w int) (headers []string, fits bool) {
 		}
 		return true
 	}
-	for _, drop := range []string{"", "Share", "Last"} {
+	for _, drop := range []string{"", "Share", "PRs", "Last"} {
 		if drop != "" {
 			headers = slices.DeleteFunc(slices.Clone(headers), func(h string) bool { return h == drop })
 		}
@@ -240,7 +346,18 @@ func (m Model) authorColumns(w int) (headers []string, fits bool) {
 	return headers, false
 }
 
-func authorsRepo(r *repoState, w, limit int, windowed, all bool, headers []string) []string {
+// anyPRsInHistory reports whether any loaded repo's history has merged PRs,
+// which is when the Authors table gets a PRs column.
+func (m Model) anyPRsInHistory() bool {
+	for _, r := range m.repos {
+		if r.local != nil && r.hist.PRSizes.PRs > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) authorsRepo(r *repoState, w, limit int, windowed, all bool, headers []string, widths []int, byAuthor, active chartBounds) []string {
 	h := r.hist
 	if len(h.Authors) == 0 {
 		if windowed {
@@ -248,20 +365,18 @@ func authorsRepo(r *repoState, w, limit int, windowed, all bool, headers []strin
 		}
 		return []string{dimStyle.Render("No commits yet.")}
 	}
-	recent := "the last 90 days"
-	if windowed {
-		recent = "the window's last 90 days"
-	}
-	summary := fmt.Sprintf("%s contributors · %s active in %s",
-		boldStyle.Render(num(len(h.Authors))), boldStyle.Render(num(h.ActiveAuthors90d)), recent)
-
 	_, more := listCut(len(h.Authors), limit, all)
 	t := authorsTable(r, w, limit, all, headers)
 	rendered := t.Render()
 	if lipgloss.Width(rendered) > w {
 		rendered = t.Width(w).Render() // let lipgloss squeeze the columns
 	}
-	return []string{section("Contributors by commits") + "\n" + withNote(summary+"\n"+rendered, more)}
+	return []string{
+		flow(figureTiles(m.authorFigures(r), widths), w),
+		section(fmt.Sprintf("%s (top %d)", authorCharts[0], topAuthorsCharted)) + "\n" + commitsByAuthorChart(h, w, m.chartH(), byAuthor),
+		section(authorCharts[1]) + "\n" + activeAuthorsChart(r, w, m.chartH(), active),
+		section("Contributors by commits") + "\n" + withNote(rendered, more),
+	}
 }
 
 // authorsTable is a repo's contributors table with the given columns (see authorColumns).
@@ -272,6 +387,10 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 	wide := slices.Contains(headers, "First")
 	nameW := min(28, max(w/4, 12))
 	topCommits := float64(authors[0].Commits)
+	prs := map[string]int{}
+	for _, p := range h.PRSizes.ByAuthor {
+		prs[strings.ToLower(p.Name)] = p.PRs
+	}
 	cell := func(i int, a stats.Author, col string) string {
 		switch col {
 		case "#":
@@ -280,6 +399,8 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 			return truncate(a.Name, nameW)
 		case "Commits":
 			return num(a.Commits)
+		case "PRs":
+			return num(prs[strings.ToLower(a.Name)])
 		case "Share":
 			if wide {
 				return hbar(float64(a.Commits), topCommits, 10) + " " + pct(a.Commits, h.Commits)
@@ -306,7 +427,7 @@ func authorsTable(r *repoState, w, limit int, all bool, headers []string) *table
 			switch headers[col] {
 			case "#":
 				s = s.Align(lipgloss.Right).Foreground(subtle)
-			case "Commits":
+			case "Commits", "PRs":
 				s = s.Align(lipgloss.Right)
 			case "Added":
 				s = s.Align(lipgloss.Right).Foreground(green)

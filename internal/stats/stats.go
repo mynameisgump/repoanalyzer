@@ -56,6 +56,30 @@ type Bucket struct {
 	Commits int       `json:"commits"`
 }
 
+// WeeklyAuthors is one Monday-start week's contributor activity (local time).
+type WeeklyAuthors struct {
+	Start  time.Time `json:"start"`
+	Active int       `json:"active"` // authors with a commit this week
+	// ByAuthor is each active author's commits, most first; name matches Author.Name.
+	ByAuthor []AuthorCommits `json:"by_author,omitempty"`
+}
+
+// AuthorCommits is one author's commit count.
+type AuthorCommits struct {
+	Name    string `json:"name"`
+	Commits int    `json:"commits"`
+}
+
+// Commits returns an author's commits this week, by Author.Name.
+func (wk WeeklyAuthors) Commits(name string) int {
+	for _, a := range wk.ByAuthor {
+		if a.Name == name {
+			return a.Commits
+		}
+	}
+	return 0
+}
+
 // Point is a week's end-of-week total line count.
 type Point struct {
 	Start time.Time `json:"start"`
@@ -71,6 +95,9 @@ type Summary struct {
 	Authors          []Author  `json:"authors"` // most commits first
 	ActiveAuthors90d int       `json:"active_authors_90d"`
 	Weekly           []Bucket  `json:"weekly"` // contiguous, zero-filled, Monday-start
+	// AuthorsWeekly is contributor activity per week, contiguous and
+	// zero-filled from the first commit's week through the last's.
+	AuthorsWeekly []WeeklyAuthors `json:"authors_weekly"`
 	// LinesOverTime is filled in separately from mainline history; see LinesOverTime.
 	LinesOverTime []Point `json:"lines_over_time"`
 	HotFiles      []File  `json:"hot_files"`
@@ -256,8 +283,39 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths) Summary {
 
 	if len(commits) > 0 {
 		s.Weekly = Weekly(commits, s.First, s.Last)
+		s.AuthorsWeekly = authorsWeekly(commits, authors, s.First, s.Last)
 	}
 	return s
+}
+
+// authorsWeekly counts each author's commits per Monday-start week, zero-filled
+// from first's week through last's. authors maps lowercased names to their
+// Author, so every week uses the same display name.
+func authorsWeekly(commits []gitlog.Commit, authors map[string]*Author, first, last time.Time) []WeeklyAuthors {
+	counts := map[time.Time]map[string]int{}
+	for _, c := range commits {
+		wk := weekStart(c.When)
+		if counts[wk] == nil {
+			counts[wk] = map[string]int{}
+		}
+		counts[wk][strings.ToLower(c.AuthorName)]++
+	}
+	var out []WeeklyAuthors
+	end := weekStart(last)
+	for wk := weekStart(first); !wk.After(end); wk = wk.AddDate(0, 0, 7) {
+		w := WeeklyAuthors{Start: wk, Active: len(counts[wk])}
+		for key, n := range counts[wk] {
+			w.ByAuthor = append(w.ByAuthor, AuthorCommits{Name: authors[key].Name, Commits: n})
+		}
+		sort.Slice(w.ByAuthor, func(i, j int) bool {
+			if w.ByAuthor[i].Commits != w.ByAuthor[j].Commits {
+				return w.ByAuthor[i].Commits > w.ByAuthor[j].Commits
+			}
+			return w.ByAuthor[i].Name < w.ByAuthor[j].Name
+		})
+		out = append(out, w)
+	}
+	return out
 }
 
 func weekStart(t time.Time) time.Time {
