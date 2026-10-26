@@ -297,6 +297,34 @@ func TestAuthorPeriodAndFocus(t *testing.T) {
 	}
 }
 
+// Where overlaid lines share a cell, a line drawn over the others keeps its
+// own dots rather than picking up theirs, so it looks just as it does alone.
+func TestOverlaidLinesKeepTheirShape(t *testing.T) {
+	start := time.Date(2025, 1, 6, 0, 0, 0, 0, time.Local)
+	line := func(name string, vals ...float64) series {
+		s := series{name: name, color: palette[0]}
+		for i, v := range vals {
+			s.times = append(s.times, start.AddDate(0, 0, 7*i))
+			s.vals = append(s.vals, v)
+		}
+		return s
+	}
+	under := line("under", 0, 5, 1, 6, 2, 7, 3, 8)
+	top := line("top", 8, 3, 7, 2, 6, 1, 5, 0)
+	top.over = true
+	b := chartBounds{from: start, to: start.AddDate(0, 0, 49), peak: 8}
+	both := strings.Split(ansi.Strip(timeChart([]series{under, top}, 40, 8, nil, b)), "\n")
+	alone := strings.Split(ansi.Strip(timeChart([]series{top}, 40, 8, nil, b)), "\n")
+	for y := range alone {
+		want, got := []rune(alone[y]), []rune(both[y])
+		for x, r := range want {
+			if r >= 0x2801 && r <= 0x28FF && got[x] != r {
+				t.Errorf("cell %d,%d is %c overlaid, %c on its own", x, y, got[x], r)
+			}
+		}
+	}
+}
+
 // Scrolling must reuse the rendered tab: re-rendering Activity takes milliseconds per keypress.
 func TestScrollDoesNotRerender(t *testing.T) {
 	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})

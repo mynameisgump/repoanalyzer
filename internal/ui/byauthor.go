@@ -90,6 +90,7 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 		ss = append(ss, s)
 		switch {
 		case name == hover:
+			s.over = true
 			hovered = &s
 		case len(focused) == 0 || slices.Contains(focused, name):
 			if hover != "" {

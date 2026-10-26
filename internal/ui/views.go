@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NimbleMarkets/ntcharts/canvas"
+	"github.com/NimbleMarkets/ntcharts/canvas/graph"
+	"github.com/NimbleMarkets/ntcharts/canvas/runes"
 	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	"github.com/NimbleMarkets/ntcharts/sparkline"
 	"github.com/charmbracelet/lipgloss"
@@ -624,6 +627,8 @@ type series struct {
 	color lipgloss.TerminalColor
 	times []time.Time
 	vals  []float64
+	// over draws the line whole over the ones before it; see drawLines.
+	over bool
 }
 
 func legend(ss []series) string {
@@ -680,19 +685,55 @@ func timeChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds) 
 	if yFmt != nil {
 		opts = append(opts, timeserieslinechart.WithYLabelFormatter(func(_ int, v float64) string { return yFmt(v) }))
 	}
-	var names []string
-	for _, s := range drawable {
-		opts = append(opts, timeserieslinechart.WithDataSetStyle(s.name, lipgloss.NewStyle().Foreground(s.color)))
-		names = append(names, s.name)
-	}
 	c := timeserieslinechart.New(w, h, opts...)
-	for _, s := range drawable {
+	drawLines(&c, drawable)
+	return c.View()
+}
+
+// drawLines draws each series on c's axes as a braille line, later ones on top.
+// Like ntcharts' DrawBrailleDataSets, lines sharing a cell merge their dots in
+// the later one's color, which keeps every line unbroken. A line marked over
+// takes its cells whole instead, so it keeps its shape without the dots of the
+// lines beneath, which break where it crosses them.
+func drawLines(c *timeserieslinechart.Model, ss []series) {
+	c.Clear()
+	c.DrawXYAxisAndLabel()
+	gw, gh := c.GraphWidth(), c.GraphHeight()
+	xs := float64(gw) / (c.ViewMaxX() - c.ViewMinX())
+	ys := float64(gh) / (c.ViewMaxY() - c.ViewMinY())
+	left := 0
+	if c.YStep() > 0 {
+		left = c.Origin().X + 1
+	}
+	for _, s := range ss {
+		g := graph.NewBrailleGrid(gw, gh, 0, float64(gw), 0, float64(gh))
+		var prev canvas.Point
 		for i, t := range s.times {
-			c.PushDataSet(s.name, timeserieslinechart.TimePoint{Time: t, Value: s.vals[i]})
+			p := g.GridPoint(canvas.Float64Point{
+				X: (float64(t.Unix()) - c.ViewMinX()) * xs,
+				Y: (s.vals[i] - c.ViewMinY()) * ys,
+			})
+			if i == 0 {
+				prev = p
+			}
+			for _, q := range graph.GetLinePoints(prev, p) {
+				g.Set(q)
+			}
+			prev = p
+		}
+		style := lipgloss.NewStyle().Foreground(s.color)
+		for y, row := range g.BraillePatterns() {
+			for x, r := range row {
+				switch p := (canvas.Point{X: left + x, Y: y}); {
+				case r == runes.BrailleBlockOffset:
+				case s.over:
+					c.Canvas.SetCell(p, canvas.NewCellWithStyle(r, style))
+				default:
+					graph.DrawBrailleRune(&c.Canvas, p, r, style)
+				}
+			}
 		}
 	}
-	c.DrawBrailleDataSets(names)
-	return c.View()
 }
 
 // punchcard draws a weekday × hour heatmap with each hour cellW columns wide.
