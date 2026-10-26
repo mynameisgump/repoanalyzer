@@ -80,6 +80,7 @@ type Model struct {
 	details       bool         // x adds the Email column to the Authors table
 	authorPeriod  authorPeriod // what Commits by author counts over; p cycles it
 	hover         authorRef    // whose name in a Commits by author legend the pointer is over
+	linear        bool         // y draws Commits by author on a linear scale rather than log
 	sideBySide    bool         // when comparing, c puts repos in columns instead of stacking them
 	// content is the rendered body, split into lines. Rendering a tab can take
 	// milliseconds (Activity draws several charts), so it's redone only when
@@ -242,6 +243,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			if m.tab == authorsTab {
 				m.cycleFocus()
+				rerender = true
+			}
+		case "y":
+			if m.tab == authorsTab {
+				m.linear = !m.linear
 				rerender = true
 			}
 		case "t":
@@ -476,6 +482,10 @@ func (m Model) headerLayout() (string, []hotspot) {
 		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
 		settingKeys = append(settingKeys, "a")
 	}
+	if label := m.scaleLabel(); label != "" {
+		settings = append(settings, lipgloss.NewStyle().Foreground(accent).Render(label))
+		settingKeys = append(settingKeys, "y")
+	}
 	if label := m.windowLabel(); label != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
 		if !m.windowed() {
@@ -539,6 +549,11 @@ func (m Model) footerLayout() (string, []hotspot) {
 			keys = append(keys, hint{"x more details", "x"})
 		}
 		keys = append(keys, hint{"p period", "p"})
+		if m.linear {
+			keys = append(keys, hint{"y log scale", "y"})
+		} else {
+			keys = append(keys, hint{"y linear scale", "y"})
+		}
 		if m.focusable() > 0 {
 			keys = append(keys, hint{"a focus author", "a"})
 		}

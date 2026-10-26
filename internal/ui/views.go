@@ -353,7 +353,7 @@ func (m Model) authorsRepo(r *repoState, w, limit int, windowed, all bool, heade
 	}
 	return []string{
 		flow(figureTiles(m.authorFigures(r), widths), w),
-		section(fmt.Sprintf("%s per %s (top %d, log scale)", authorCharts[0], m.authorPeriod, topAuthorsCharted)) + "\n" +
+		m.byAuthorTitle() + "\n" +
 			m.commitsByAuthorChart(r, w, byAuthor),
 		section(authorCharts[1]) + "\n" + activeAuthorsChart(r, w, m.chartH(), active),
 		section("Contributors by commits") + "\n" + withNote(rendered, more),
@@ -670,7 +670,7 @@ func lineChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds, 
 	if len(drawable) == 0 {
 		return dimStyle.Render("Not enough history for a chart yet.")
 	}
-	minT, maxT, peak := drawable[0].times[0], drawable[0].times[0], math.Max(b.peak, 1)
+	minT, maxT, peak := drawable[0].times[0], drawable[0].times[0], b.peak
 	if !b.from.IsZero() && b.from.Before(minT) {
 		minT = b.from
 	}
@@ -687,6 +687,9 @@ func lineChart(ss []series, w, h int, yFmt func(float64) string, b chartBounds, 
 			}
 			peak = math.Max(peak, s.vals[i])
 		}
+	}
+	if peak <= 0 {
+		peak = 1 // all zeros: the axis still needs a height
 	}
 	opts := []timeserieslinechart.Option{
 		timeserieslinechart.WithTimeRange(minT, maxT),

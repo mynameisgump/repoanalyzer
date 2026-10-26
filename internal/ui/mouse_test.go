@@ -402,3 +402,52 @@ func TestClickFocusAuthors(t *testing.T) {
 		t.Errorf("moving off Ada didn't bring the colors back")
 	}
 }
+
+// Clicking the scale in Commits by author's title switches it between log and
+// linear, like y.
+func TestClickChartScale(t *testing.T) {
+	var m tea.Model = New(Options{Roots: []string{"/src/repo"}, NoRemote: true})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m, _ = m.Update(localMsg{idx: 0, data: sampleLocal()})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	click := func(text string) {
+		t.Helper()
+		for n, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+			if i := strings.Index(line, text); i >= 0 {
+				m, _ = m.Update(tea.MouseMsg{X: ansi.StringWidth(line[:i]) + 1, Y: n, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+				return
+			}
+		}
+		t.Fatalf("%q isn't on screen:\n%s", text, ansi.Strip(m.View()))
+	}
+	// Either way the busiest period reaches the top of the chart.
+	reachesTop := func() bool {
+		body := ansi.Strip(m.(Model).body())
+		_, chart, _ := strings.Cut(body, "Commits by author")
+		for _, line := range strings.Split(chart, "\n") {
+			if _, plot, ok := strings.Cut(line, "│"); ok {
+				return strings.ContainsAny(plot, "▀█") // the first row of the plot
+			}
+		}
+		return false
+	}
+	if !reachesTop() {
+		t.Errorf("on a log scale the busiest period doesn't reach the top")
+	}
+
+	click("log scale")
+	if !m.(Model).linear || !strings.Contains(ansi.Strip(m.(Model).body()), "linear scale)") || !strings.Contains(m.(Model).header(), "linear scale") {
+		t.Fatalf("clicking log scale didn't switch to linear")
+	}
+	if !reachesTop() {
+		t.Errorf("on a linear scale the busiest period doesn't reach the top")
+	}
+	click("linear scale)")
+	if m.(Model).linear {
+		t.Errorf("clicking linear scale didn't switch back")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if !m.(Model).linear {
+		t.Errorf("y didn't switch to linear")
+	}
+}

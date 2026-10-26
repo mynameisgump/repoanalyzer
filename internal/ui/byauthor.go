@@ -87,11 +87,13 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 			s.times = append(s.times, start)
 			s.vals = append(s.vals, n)
 		}
-		// Plotted on a log scale: one burst would otherwise set the y axis
-		// and squash everyone's usual weeks into the bottom rows, where
-		// the lines run over each other.
-		for k, v := range s.vals {
-			s.vals[k] = math.Log1p(v)
+		// Plotted on a log scale unless y asks for linear: one burst would
+		// otherwise set the y axis and squash everyone's usual weeks into
+		// the bottom rows, where the lines run over each other.
+		if !m.linear {
+			for k, v := range s.vals {
+				s.vals[k] = math.Log1p(v)
+			}
 		}
 		ss = append(ss, s)
 		switch {
@@ -108,7 +110,10 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 	if hovered != nil { // drawn last, over the others
 		drawn = append(drawn, *hovered)
 	}
-	commits := func(v float64) string { return num(int(math.Round(math.Expm1(v)))) }
+	var commits func(float64) string // plain integers on a linear scale
+	if !m.linear {
+		commits = func(v float64) string { return num(int(math.Round(math.Expm1(v)))) }
+	}
 	chart := blockChart(drawn, w, m.chartH(), commits, b)
 	if len(ss) == 0 || len(ss[0].times) < 2 {
 		return chart // says there isn't enough history
@@ -133,6 +138,26 @@ func (m Model) commitsByAuthorChart(r *repoState, w int, b chartBounds) string {
 		entries = append(entries, entry)
 	}
 	return flow(entries, w) + "\n" + chart
+}
+
+// byAuthorTitle is Commits by author's section title. Its scale can be
+// clicked to switch between log and linear, as y does.
+func (m Model) byAuthorTitle() string {
+	bold := lipgloss.NewStyle().Bold(true)
+	scale := "log scale"
+	if m.linear {
+		scale = "linear scale"
+	}
+	return sectionStyle.Render(bold.Render(fmt.Sprintf("%s per %s (top %d, ", authorCharts[0], m.authorPeriod, topAuthorsCharted)) +
+		clickable("y", bold.Render(scale)) + bold.Render(")"))
+}
+
+// scaleLabel shows a non-default (linear) scale for Commits by author in the header.
+func (m Model) scaleLabel() string {
+	if m.tab != authorsTab || !m.linear {
+		return ""
+	}
+	return "linear scale"
 }
 
 // legendAuthor is who a focusClick key names, if they're still charted.

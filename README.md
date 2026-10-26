@@ -41,7 +41,7 @@ repoanalyzer ~/code/app ~/code/api      # compare up to 4 repos
 | `--no-mouse` | don't capture the mouse, so dragging selects text as usual |
 
 Keys: `←/→` or `1`–`5` switch tabs, `↑/↓`/`j/k` scroll, `pgup/pgdn` page, `t` cycles the time window, `o` toggles overlap and `c` side-by-side columns (when comparing),
-`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails and direct-push counts to the Authors table, `p` switches Commits by author between per 2 weeks, per month and per week, `a` steps through showing its authors one at a time,
+`+`/`-` make the line charts taller or shorter, `s` sorts PR size by author, `f` filters the Files lists to non-test or test files, `x` adds contributors' emails and direct-push counts to the Authors table, `p` switches Commits by author between per 2 weeks, per month and per week, `a` steps through showing its authors one at a time, `y` (or clicking "log scale" in its title) switches it between a log and a linear scale,
 `e` shows every row of the current tab's lists (wherever you see "+ N more"; press again to show fewer), `q` quits.
 
 Mouse: the wheel scrolls, and clicking a tab, a footer hint, a setting in the header or a "+ N more" note does what its key does, clicking a column title in PR size by author sorts by it, clicking names in the Commits by author legend limits the chart to those authors (click again to put one back), and hovering a name greys out everyone else's line; anything clickable lights up under the pointer.
