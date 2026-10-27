@@ -296,6 +296,53 @@ func TestIdentify(t *testing.T) {
 	}
 }
 
+// Merge commits are counted per author as merges, not commits, and left out of
+// every commit count, but still date when an author was around.
+func TestComputeMerges(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+	day := func(n int) time.Time { return now.AddDate(0, 0, -n) }
+	merge := []string{"p1", "p2"}
+	commits := []gitlog.Commit{
+		{AuthorName: "Maintainer", When: day(1), Parents: merge, Subject: "Merge pull request #2 from x/y"},
+		{AuthorName: "Ada", When: day(2), Parents: merge, Subject: "Merge branch 'main' into feature"},
+		{AuthorName: "Ada", When: day(3), Parents: []string{"p1"}, Subject: "Feature",
+			Files: []gitlog.FileChange{{Path: "a.go", Added: 4}}},
+		{AuthorName: "Maintainer", When: day(400), Parents: merge, Subject: "Merge pull request #1 from x/y"},
+	}
+	s := Compute(commits, now, Paths{}, nil)
+
+	if s.Commits != 1 || s.Merges != 3 || s.PRsInHistory != 2 {
+		t.Errorf("commits = %d, merges = %d, prs = %d; want 1, 3, 2", s.Commits, s.Merges, s.PRsInHistory)
+	}
+	if len(s.Authors) != 2 || s.Authors[0].Name != "Ada" || s.Authors[0].Commits != 1 || s.Authors[0].Merges != 1 ||
+		s.Authors[1].Name != "Maintainer" || s.Authors[1].Commits != 0 || s.Authors[1].Merges != 2 {
+		t.Errorf("authors = %+v", s.Authors)
+	}
+	if m := s.Authors[1]; !m.First.Equal(day(400)) || !m.Last.Equal(day(1)) || !s.Last.Equal(day(1)) {
+		t.Errorf("merges should still date activity: %+v, repo last %v", m, s.Last)
+	}
+	if s.ActiveAuthors90d != 1 {
+		t.Errorf("active = %d, want 1 (only Ada has a commit)", s.ActiveAuthors90d)
+	}
+	total, punch := 0, 0
+	for _, b := range s.Weekly {
+		total += b.Commits
+	}
+	for _, day := range s.Punchcard {
+		for _, n := range day {
+			punch += n
+		}
+	}
+	if total != 1 || punch != 1 {
+		t.Errorf("weekly total = %d, punchcard total = %d; want 1, 1", total, punch)
+	}
+	for _, wk := range s.AuthorsWeekly {
+		if wk.Commits("Maintainer") != 0 {
+			t.Errorf("merges counted in week %v: %+v", wk.Start, wk)
+		}
+	}
+}
+
 // Commits landed via a PR when they are a squash commit, a PR merge, or were
 // brought in by one from the PR branch; commits a plain merge brought in, and
 // commits straight onto the branch, were pushed directly.
@@ -326,24 +373,25 @@ func TestLandings(t *testing.T) {
 		}
 	}
 
+	// Merge commits (m3, m4, b2) aren't counted, so Merger, who only merged, isn't there.
 	l := Landings(commits, via, nil)
-	if l.Commits != 7 || l.ViaPR != 4 || l.Direct() != 3 {
+	if l.Commits != 4 || l.ViaPR != 2 || l.Direct() != 2 {
 		t.Errorf("landings = %+v", l)
 	}
-	if len(l.Monthly) != 2 || l.Monthly[0].Commits != 3 || l.Monthly[0].ViaPR != 2 || l.Monthly[1].Commits != 4 || l.Monthly[1].ViaPR != 2 {
+	if len(l.Monthly) != 2 || l.Monthly[0].Commits != 3 || l.Monthly[0].ViaPR != 2 || l.Monthly[1].Commits != 1 || l.Monthly[1].ViaPR != 0 {
 		t.Errorf("monthly = %+v", l.Monthly)
 	}
-	if len(l.ByAuthor) != 3 || l.ByAuthor[0].Name != "Ada" || l.ByAuthor[0].Direct() != 3 || l.ByAuthor[0].ViaPR != 0 ||
-		l.ByAuthor[1].Name != "Bob" || l.ByAuthor[1].ViaPR != 3 || l.ByAuthor[2].Name != "Merger" || l.ByAuthor[2].ViaPR != 1 {
+	if len(l.ByAuthor) != 2 || l.ByAuthor[0].Name != "Ada" || l.ByAuthor[0].Direct() != 2 || l.ByAuthor[0].ViaPR != 0 ||
+		l.ByAuthor[1].Name != "Bob" || l.ByAuthor[1].ViaPR != 2 {
 		t.Errorf("by author = %+v", l.ByAuthor)
 	}
 
 	// A window with the branch commits but not their merge still knows how they landed.
-	if w := Landings(branches, via, nil); w.Commits != 3 || w.ViaPR != 2 {
+	if w := Landings(branches, via, nil); w.Commits != 2 || w.ViaPR != 1 {
 		t.Errorf("windowed = %+v", w)
 	}
 	// Without a classification everything is a direct push.
-	if d := Landings(commits, nil, nil); d.ViaPR != 0 || d.Direct() != 7 {
+	if d := Landings(commits, nil, nil); d.ViaPR != 0 || d.Direct() != 4 {
 		t.Errorf("unclassified = %+v", d)
 	}
 	// History cut by --since: the merge is there but the branch isn't.

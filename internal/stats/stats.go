@@ -12,12 +12,15 @@ import (
 )
 
 // Author is one contributor; see Identities for how commits are merged into one.
+// Commits leaves out merge commits, which are counted in Merges instead; First
+// and Last cover both.
 type Author struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
 	// Aliases are other names the author committed under, most used first.
 	Aliases []string  `json:"aliases,omitempty"`
 	Commits int       `json:"commits"`
+	Merges  int       `json:"merges"`
 	Added   int       `json:"added"`
 	Deleted int       `json:"deleted"`
 	First   time.Time `json:"first"`
@@ -89,8 +92,12 @@ type Point struct {
 	Lines int       `json:"lines"`
 }
 
+// Summary is everything Compute works out. Merge commits aren't counted as
+// commits anywhere (Commits, authors, the weekly and per-author counts, the
+// punchcard), only in Merges, but they still date First and Last.
 type Summary struct {
 	Commits          int       `json:"commits"`
+	Merges           int       `json:"merges"`
 	Added            int       `json:"added"`
 	Deleted          int       `json:"deleted"`
 	First            time.Time `json:"first"`
@@ -183,7 +190,12 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identitie
 	cutoff := now.AddDate(0, 0, -90)
 
 	for _, c := range commits {
-		s.Commits++
+		merge := c.IsMerge()
+		if merge {
+			s.Merges++
+		} else {
+			s.Commits++
+		}
 		if s.First.IsZero() || c.When.Before(s.First) {
 			s.First = c.When
 		}
@@ -198,14 +210,18 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identitie
 			a = &Author{Name: p.Name, Email: p.Email, Aliases: p.Aliases, First: c.When, Last: c.When}
 			authors[key] = a
 		}
-		a.Commits++
+		if merge {
+			a.Merges++
+		} else {
+			a.Commits++
+		}
 		if c.When.Before(a.First) {
 			a.First = c.When
 		}
 		if c.When.After(a.Last) {
 			a.Last = c.When
 		}
-		if c.When.After(cutoff) {
+		if c.When.After(cutoff) && !merge {
 			active[key] = true
 		}
 
@@ -244,7 +260,9 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identitie
 			}
 			months[month].add(share)
 		}
-		s.Punchcard[(int(local.Weekday())+6)%7][local.Hour()]++
+		if !merge {
+			s.Punchcard[(int(local.Weekday())+6)%7][local.Hour()]++
+		}
 
 		if n := prNumber(c.Subject); n != "" {
 			prs[n] = true
@@ -257,6 +275,9 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identitie
 	sort.Slice(s.Authors, func(i, j int) bool {
 		if s.Authors[i].Commits != s.Authors[j].Commits {
 			return s.Authors[i].Commits > s.Authors[j].Commits
+		}
+		if s.Authors[i].Merges != s.Authors[j].Merges {
+			return s.Authors[i].Merges > s.Authors[j].Merges
 		}
 		return s.Authors[i].Name < s.Authors[j].Name
 	})
@@ -301,14 +322,17 @@ func Compute(commits []gitlog.Commit, now time.Time, paths Paths, ids *Identitie
 	return s
 }
 
-// authorsWeekly counts each author's commits per Monday-start week, zero-filled
-// from first's week through last's. authors maps lowercased display names (as
-// ids gives them) to their Author, so every week uses the same name.
-// authorsPer counts each author's commits per period, where start gives the
-// period a time falls in and periods are days long, or a month when days is 0.
+// authorsPer counts each author's commits, not merges, per period, zero-filled
+// from first's period through last's. start gives the period a time falls in,
+// and periods are days long, or a month when days is 0. authors maps lowercased
+// display names (as ids gives them) to their Author, so every period uses the
+// same name.
 func authorsPer(start func(time.Time) time.Time, days int, commits []gitlog.Commit, authors map[string]*Author, ids *Identities, first, last time.Time) []PeriodAuthors {
 	counts := map[time.Time]map[string]int{}
 	for _, c := range commits {
+		if c.IsMerge() {
+			continue
+		}
 		p := start(c.When)
 		if counts[p] == nil {
 			counts[p] = map[string]int{}
@@ -349,11 +373,14 @@ func weekStart(t time.Time) time.Time {
 	return d.AddDate(0, 0, -((int(d.Weekday()) + 6) % 7))
 }
 
-// Weekly counts commits per Monday-start week, zero-filled from first's week through last's.
+// Weekly counts commits, not merges, per Monday-start week, zero-filled from
+// first's week through last's.
 func Weekly(commits []gitlog.Commit, first, last time.Time) []Bucket {
 	counts := map[time.Time]int{}
 	for _, c := range commits {
-		counts[weekStart(c.When)]++
+		if !c.IsMerge() {
+			counts[weekStart(c.When)]++
+		}
 	}
 	var out []Bucket
 	end := weekStart(last)

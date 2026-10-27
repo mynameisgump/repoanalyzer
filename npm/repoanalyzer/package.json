@@ -1,0 +1,18 @@
+{
+  "name": "@mynameisgump/repoanalyzer",
+  "version": "0.0.0",
+  "description": "Terminal dashboard of stats and charts for the git repo you run it in",
+  "keywords": ["git", "stats", "tui", "dashboard", "cli"],
+  "homepage": "https://github.com/mynameisgump/repoanalyzer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mynameisgump/repoanalyzer.git"
+  },
+  "bin": {
+    "repoanalyzer": "bin/repoanalyzer.js"
+  },
+  "files": ["bin"],
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -35,6 +35,9 @@ type Commit struct {
 	Files       []FileChange
 }
 
+// IsMerge reports whether c is a merge commit.
+func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
+
 const (
 	recordSep = '\x1e'
 	fieldSep  = "\x1f"

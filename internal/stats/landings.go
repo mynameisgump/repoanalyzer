@@ -82,6 +82,7 @@ func ViaPR(commits, mainline []gitlog.Commit) map[string]bool {
 
 // Landings counts how commits landed, using viaPR from ViaPR (nil makes every
 // commit direct) and ids to name authors (nil works them out from commits).
+// Merge commits aren't counted, as in Compute.
 func Landings(commits []gitlog.Commit, viaPR map[string]bool, ids *Identities) LandingStats {
 	if ids == nil {
 		ids = Identify(commits)
@@ -90,6 +91,9 @@ func Landings(commits []gitlog.Commit, viaPR map[string]bool, ids *Identities) L
 	months := map[time.Time]*MonthlyLandings{}
 	people := map[string]*AuthorLandings{}
 	for _, c := range commits {
+		if c.IsMerge() {
+			continue
+		}
 		pr := viaPR[c.Hash]
 		local := c.When.Local()
 		month := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.Local)
